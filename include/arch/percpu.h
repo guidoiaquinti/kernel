@@ -25,6 +25,7 @@ struct cpu {
     volatile bool online;     // secondary core: brought up and idling
     uint64_t ticks;           // this core's timer interrupts
     uint64_t tick_deadline;   // its next timer compare value
+    uintptr_t gic_redist;     // GICv3 (virt): this core's redistributor frame
 } __attribute__((aligned(64)));
 
 extern struct cpu cpus[MAX_CPUS];

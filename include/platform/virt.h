@@ -28,8 +28,11 @@ struct virt_platform {
     size_t dtb_size;
     uintptr_t uart_base;
     unsigned uart_irq;
+    unsigned gic_version;                  // 2 (GICv2) or 3 (GICv3)
     uintptr_t gic_dist;
-    uintptr_t gic_cpu;
+    uintptr_t gic_cpu;                     // GICv2: CPU interface
+    uintptr_t gic_redist;                  // GICv3: redistributor region
+    size_t gic_redist_size;
     uintptr_t fw_cfg_base;
     unsigned reserved_count;
     struct virt_reserved_region reserved[VIRT_MAX_RESERVED];

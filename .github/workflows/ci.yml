@@ -127,6 +127,10 @@ jobs:
             args: --ram 64M --no-graphics --repeat 32
           - profile: el2-entry
             args: --el2 --no-graphics --repeat 32 --smp 4
+          - profile: gicv3
+            args: --gic 3 --smp 4 --repeat 64
+          - profile: gicv3-el2
+            args: --gic 3 --el2 --smp 4 --no-graphics --repeat 32
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7

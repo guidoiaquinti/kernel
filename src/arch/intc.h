@@ -7,7 +7,7 @@
 // numbers are the KoraOS numbers from peripherals/irq.h.
 
 // Controller name, for diagnostics.
-extern const char intc_name[];
+extern const char *intc_name;
 
 // Bring the controller up with every IRQ disabled and nothing pending (core 0).
 void intc_init(void);

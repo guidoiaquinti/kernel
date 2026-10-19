@@ -59,7 +59,7 @@ struct node {
     size_t interrupts_len;
     bool memory, uart, gic, fw_cfg, virtio, disabled, translated_bus;
     bool reserved_children, reserved;
-    bool cpu, psci;
+    bool cpu, psci, gic3;
     enum virt_psci_method method;
 };
 
@@ -169,7 +169,16 @@ static bool finish_node(const struct node *n, unsigned depth, struct virt_platfo
             return false;
         }
         out->gic_dist = base;
-        out->gic_cpu = cpu;
+        if (n->gic3) {
+            // GICv3: the second region holds every core's redistributor
+            // frames; the CPU interface is system registers.
+            out->gic_version = 3;
+            out->gic_redist = cpu;
+            out->gic_redist_size = cpu_size;
+        } else {
+            out->gic_version = 2;
+            out->gic_cpu = cpu;
+        }
     } else if (n->fw_cfg) {
         if (out->fw_cfg_base || size < 0x18) {
             return false;
@@ -310,7 +319,8 @@ bool virt_platform_parse(const void *dtb, size_t available) {
                     virt = compatible(value, len, "linux,dummy-virt");
                 }
                 n->uart = compatible(value, len, "arm,pl011");
-                n->gic = compatible(value, len, "arm,cortex-a15-gic") ||
+                n->gic3 = compatible(value, len, "arm,gic-v3");
+                n->gic = n->gic3 || compatible(value, len, "arm,cortex-a15-gic") ||
                          compatible(value, len, "arm,gic-400");
                 n->fw_cfg = compatible(value, len, "qemu,fw-cfg-mmio");
                 n->virtio = compatible(value, len, "virtio,mmio");

@@ -65,5 +65,22 @@ each core with its own tick count and what it runs.
 ```
 
 QEMU raspi3b always has four cores. The smoke test checks that every core comes
-online and that its own timer ticks (`--smp 4` on virt; two CI profiles use it,
-one of them entering through EL2, so PSCI over `smc`).
+online and that its own timer ticks (`--smp 4` on virt; four CI profiles use it,
+with GICv2 and GICv3, entering at EL1 (PSCI over `hvc`) or through EL2 (`smc`)).
+
+On an Apple Silicon Mac, `--accel hvf` runs the cores on real hardware cores,
+truly in parallel and with weak memory ordering:
+
+```bash
+./run-qemu.sh --target qemu_virt --accel hvf --smp 4
+```
+
+## GICv3 (virt)
+
+QEMU's hvf accelerator only emulates a GICv3, so the virt kernel supports both
+versions and picks the one the device tree describes
+([`src/arch/irq_gic3.c`](../src/arch/irq_gic3.c)). The distributor uses
+affinity routing and sends every shared interrupt to core 0; each core finds
+its own redistributor frame by its MPIDR, wakes it and configures its timer
+interrupt there; the CPU interface is the `ICC_*` system registers. Booting
+through EL2, `boot.S` first lets EL1 use them (`ICC_SRE_EL2`).

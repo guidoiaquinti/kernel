@@ -12,7 +12,7 @@
 #include "intc.h"
 #include "memory_access.h"
 
-const char intc_name[] = "BCM2835 legacy";
+const char *intc_name = "BCM2835 legacy";
 
 // The BCM2836 local controller has one timer-routing and one source register
 // per core, 4 bytes apart; peripheral (GPU) IRQs go to core 0 only

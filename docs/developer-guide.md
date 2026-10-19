@@ -97,7 +97,19 @@ KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 ```
 
 `--smp N` (or `KORA_QEMU_SMP`) gives virt 1 to 4 cores (default 1); QEMU
-raspi3b always has four. See [smp.md](smp.md).
+raspi3b always has four. See [smp.md](smp.md). `--gic 3` selects a GICv3 for
+virt (default 2).
+
+On an Apple Silicon Mac, `--accel hvf` runs virt on the host's own cores
+through Hypervisor.framework (`-cpu host`; hvf needs a GICv3, so it implies
+`--gic 3`). The cores really run in parallel, with the CPU's weak memory
+ordering, which TCG emulation does not reproduce: use it for anything touching
+SMP and locking.
+
+```bash
+./run-qemu.sh --target qemu_virt --accel hvf --smp 4
+tests/run-qemu-smoke.py --target qemu_virt --gic 3 --accel hvf --smp 4
+```
 
 The launcher uses the matching configuration's `kernel.img` and forwards extra
 QEMU arguments. Ctrl-A X quits. `KORA_QEMU_DISPLAY` overrides the native display

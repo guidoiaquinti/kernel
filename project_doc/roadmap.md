@@ -180,10 +180,15 @@ There is no page-table sharing to manage.
    Then, as a virt-only step: a GICv3 driver (picked from the device tree)
    and `--accel hvf`, so virt runs on an Apple Silicon Mac's own cores, truly
    in parallel with weak memory ordering, for the scheduling PRs below.
-5. **Per-core scheduling and placement**: per-core run queues, least-loaded
-   placement at spawn, an optional core argument to `spawn`, shell syntax for
-   pinning, and a `ps`-style command showing which core each task runs on. All
-   device interrupts routed to core 0; idle cores pick up work on their tick.
+5. **Per-core scheduling and placement** (done): each task stays on one core
+   for life; least-loaded placement at spawn (`sched_place`, host-tested), or
+   `SPAWN_CORE(n)` in `spawn`'s flags and `cmd args @N` in the shell; every
+   core schedules its own tasks with its own tick and has an idle task (core 0
+   too); `/bin/ps` over a `task_info` syscall (19). One IRQ-safe scheduler lock
+   rather than one per queue: wake-ups cross cores constantly and the BKL
+   serializes the kernel anyway. All device interrupts stay on core 0; idle
+   cores pick up work on their tick. Exited tasks are reaped only once off
+   their core's stack (`on_cpu`).
 6. **Threads and jobs**: `thread_create(fn, arg, core)`, thread exit and join,
    process lifetime and kill semantics as above; the `libk` job API on top.
 7. **Userland and CI**: atomics in `libk`; demos for a job-parallel computation

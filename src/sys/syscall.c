@@ -412,7 +412,8 @@ static long sys_free_pages(uint64_t base) {
 // spawn(name, argc, argv, flags): load a program and run it as a child; with
 // SPAWN_NOWAIT return at once (a background job), otherwise once it exits.
 static long sys_spawn(const char *name, int argc, char *const argv[], uint64_t flags) {
-    if (!uptr_ok((uint64_t)name, 1) || (flags & ~(uint64_t)SPAWN_NOWAIT) != 0) {
+    if (!uptr_ok((uint64_t)name, 1) ||
+        (flags & ~(uint64_t)(SPAWN_NOWAIT | SPAWN_CORE_MASK)) != 0) {
         return -1;
     }
     if (argc < 0) {
@@ -529,6 +530,11 @@ void syscall_handle(struct trapframe *tf) {
         break;
     case SYS_permit:
         ret = task_permit();
+        break;
+    case SYS_task_info:
+        ret = uptr_ok(a1, sizeof(struct ktask_info))
+                  ? task_info_get((unsigned)a0, (struct ktask_info *)a1)
+                  : -1;
         break;
     case SYS_volume_info:
         ret = sys_volume_info((unsigned)a0, (struct kvolume_info *)a1);

@@ -55,6 +55,7 @@ run_test blkdev src/fs/blkdev.c
 run_test term src/video/term.c
 run_test printf src/lib/printf.c
 run_test virt src/platform/virt.c
+run_test placement src/proc/placement.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST)
 run_test kmalloc src/mm/kmalloc.c src/mm/kmalloc_stress.c src/arch/spinlock.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST -pthread)

@@ -78,6 +78,9 @@ int shell_mock_spawn_flags(const char *name, int argc, char *const argv[], int f
     last_argc = argc;
     last_spawn_flags = flags;
     last_argument_terminated = argc > 0 && kstreq(argv[argc - 1], "a");
+    if ((flags & 0xf00) == SPAWN_CORE(9)) {
+        return -1;  // no such core
+    }
     if (flags & SPAWN_NOWAIT) {
         background_job_live = true;
         return 124;
@@ -241,5 +244,29 @@ static void background_jobs(void) {
           "quoted and escaped ampersands are arguments, not background jobs");
 }
 
+static void core_pinning(void) {
+    reset();
+    append("echo a @2\nexit\n");
+    CHECK(shell_test_main() == 0 && spawn_calls == 1 && last_argc == 2 &&
+          last_spawn_flags == SPAWN_CORE(2) && last_argument_terminated,
+          "trailing @2 pins to core 2 and is not an argument");
+    reset();
+    append("echo a @3 &\nexit\n");
+    CHECK(shell_test_main() == 0 && last_argc == 2 &&
+          last_spawn_flags == (SPAWN_NOWAIT | SPAWN_CORE(3)), "@N combines with &");
+    reset();
+    append("echo a '@2'\necho a \\@2\nexit\n");
+    CHECK(shell_test_main() == 0 && spawn_calls == 2 && last_argc == 3 && last_spawn_flags == 0,
+          "quoted and escaped @2 are arguments");
+    reset();
+    append("echo a @x\necho a @\necho a @12345\nexit\n");
+    CHECK(shell_test_main() == 0 && spawn_calls == 0 &&
+          output_contains("shell: @N needs a core number"), "malformed @N rejected, nothing run");
+    reset();
+    append("echo a @9\nexit\n");
+    CHECK(shell_test_main() == 0 && spawn_calls == 1 &&
+          output_contains("shell: cannot run echo on cpu 9"), "spawn failure on a pinned core reported");
+}
+
 TEST_MAIN(fragmented_reads, line_boundaries, drained_line_not_dispatched,
-          argument_boundaries, maximal_assign_line, quoted_tokens, background_jobs)
+          argument_boundaries, maximal_assign_line, quoted_tokens, background_jobs, core_pinning)

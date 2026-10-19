@@ -28,6 +28,7 @@
 #define SYS_MSLEEP      16
 #define SYS_FORBID      17
 #define SYS_PERMIT      18
+#define SYS_TASK_INFO   19
 
 #define SYS_CHDIR 32
 #define SYS_GETCWD 33

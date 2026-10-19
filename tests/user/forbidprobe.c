@@ -8,6 +8,34 @@
 //   forbidprobe hold <ms>  stay forbidden, spinning, for ms (for `tasks`).
 #include "../../user/libk/koraos.h"
 
+// Result lines are assembled first and written with one write(): tasks on
+// other cores print at the same time, and only a single write is atomic.
+static char line[96];
+static unsigned line_len;
+
+static void add(const char *s) {
+    while (*s && line_len < sizeof(line) - 1) {
+        line[line_len++] = *s++;
+    }
+}
+
+static void add_num(unsigned long v) {
+    char digits[24];
+    unsigned n = 0;
+    do {
+        digits[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    while (n > 0 && line_len < sizeof(line) - 1) {
+        line[line_len++] = digits[--n];
+    }
+}
+
+static void put_line(void) {
+    write(1, line, line_len);
+    line_len = 0;
+}
+
 // Longest gap between consecutive clock reads over `ms`: the time slices
 // another task got, if this one was preempted.
 static unsigned long longest_gap_us(unsigned long ms) {
@@ -61,10 +89,11 @@ int main(int argc, char **argv) {
     forbid();
     unsigned long forbidden_gap = longest_gap_us(300);
     permit();
-    kputs("forbidprobe: longest gap free ");
-    kput_int((long)free_gap);
-    kputs(" us, forbidden ");
-    kput_int((long)forbidden_gap);
-    kputs(" us\n");
+    add("forbidprobe: longest gap free ");
+    add_num(free_gap);
+    add(" us, forbidden ");
+    add_num(forbidden_gap);
+    add(" us\n");
+    put_line();
     return 0;
 }

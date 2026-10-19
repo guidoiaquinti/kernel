@@ -26,6 +26,7 @@
 #include "mm.h"
 #include "mm/frame_alloc.h"
 #include "mm/kmalloc.h"
+#include "proc/placement.h"
 #include "proc/user_mem.h"
 #include "lib/printf.h"
 #include "lib/string.h"
@@ -52,28 +53,43 @@ static task_t *volatile bkl_holder;  // diagnostics
 
 #define current (this_cpu()->curr)
 
-// Secondary cores' boot threads: what they run when they have no task (all
-// of the time until Milestone 7 PR 5 gives them run queues).
+// Every core's idle task: what it runs when none of its tasks can. It waits
+// for interrupts and looks for work after each one (its own tick, every 10 ms,
+// at the latest: there are no inter-processor interrupts). A secondary core's
+// idle task is its boot thread; core 0's has a stack of its own, because core
+// 0's boot thread is task 0, which blocks like any other task.
 static task_t idle_tasks[MAX_CPUS];
+static uint8_t idle0_stack[KSTACK_PAGES * PAGE_SIZE] __attribute__((aligned(16)));
+
+static void idle_setup(task_t *t, unsigned core) {
+    t->pid = 0;
+    t->core = core;
+    t->state = TASK_RUNNABLE;
+    const char name[] = "idle";
+    for (unsigned i = 0; i < 4; i++) {
+        t->name[i] = name[i];
+    }
+    t->name[4] = (char)('0' + core);
+    cpus[core].idle = t;
+}
 
 void task_init_idle(void) {
     struct cpu *c = this_cpu();
-    task_t *t = &idle_tasks[c->id];
-    t->pid = 0;
-    t->state = TASK_RUNNABLE;
-    t->name[0] = 'i';
-    t->name[1] = 'd';
-    t->name[2] = 'l';
-    t->name[3] = 'e';
-    t->name[4] = (char)('0' + c->id);
-    c->idle = t;
-    c->curr = t;
+    idle_setup(&idle_tasks[c->id], c->id);
+    c->curr = c->idle;
+    c->curr->on_cpu = true;
 }
+
+static void idle_entry(void);
 
 void task_init_boot(void) {
     struct cpu *c = this_cpu();
-    c->idle = &boot_task;
+    boot_task.core = 0;
+    boot_task.on_cpu = true;
     c->curr = &boot_task;
+    idle_setup(&idle_tasks[0], 0);
+    idle_tasks[0].ctx.lr = (uint64_t)idle_entry;
+    idle_tasks[0].ctx.sp = (uint64_t)(idle0_stack + sizeof(idle0_stack));
     // kernel_main runs in the kernel, so it holds the BKL like any task would.
     spin_lock(&bkl);
     boot_task.bkl = true;
@@ -146,6 +162,7 @@ int task_permit(void) {
 // Grab a free table slot and give it a fresh pid. Returns NULL if the table is
 // full. Leaves the slot RUNNABLE; the caller fills in the rest.
 static void task_free(task_t *t);
+static void wait_off_cpu(const task_t *t);
 
 // Free zombies nobody will reap: their parent exited before them.
 static void reap_orphans(void) {
@@ -180,6 +197,7 @@ static void set_state(task_t *t, task_state_t state) {
 // Release a task's held memory and return its slot to the pool. Never called
 // on the running task: its kernel stack is in use.
 static void task_free(task_t *t) {
+    wait_off_cpu(t);
     size_t peak = task_kstack_peak(t);
     if (peak > kstack_peak_max) {
         kstack_peak_max = peak;
@@ -214,20 +232,47 @@ static task_t *parent_of(const task_t *t) {
 }
 
 // Scheduling ---------------------------------------------------------------
+//
+// Every task belongs to one core for life (t->core, chosen at creation); a
+// core only ever runs its own tasks, so the table filtered by core is that
+// core's run queue. One IRQ-safe sched_lock covers all of them: wake-ups often
+// cross cores (a keyboard interrupt on core 0 wakes a shell on core 1, a child
+// exiting wakes its parent elsewhere), and with at most four cores under the
+// BKL a lock per queue would only add lock ordering. The woken task's core
+// notices on its next interrupt (its tick, within 10 ms): no IPIs.
 
-// The next runnable task after `from` in round-robin order over the boot task
-// and the table, or `from` itself if nothing else can run, or NULL.
-static task_t *pick_next(task_t *from) {
+// The next runnable task of `core` after `from` in round-robin order over the
+// boot task (core 0) and the table, or `from` itself if nothing else can run,
+// or NULL. Idle tasks are not candidates: switch_away falls back to them.
+static task_t *pick_next(unsigned core, task_t *from) {
     int slots = MAX_TASKS + 1;  // slot 0 is the boot task
-    int start = from == &boot_task ? 0 : (int)(from - tasks) + 1;
+    int start = 0;
+    if (from >= tasks && from < tasks + MAX_TASKS) {
+        start = (int)(from - tasks) + 1;
+    }
     for (int i = 1; i <= slots; i++) {
         int slot = (start + i) % slots;
         task_t *t = slot == 0 ? &boot_task : &tasks[slot - 1];
-        if (t->state == TASK_RUNNABLE) {
+        if (t->state == TASK_RUNNABLE && t->core == core) {
             return t;
         }
     }
     return NULL;
+}
+
+// After a context switch, on the incoming task's stack: the outgoing task is
+// now off its stack (an exited one may be freed from here on).
+static void finish_switch(void) {
+    struct cpu *c = this_cpu();
+    __atomic_store_n(&c->switched_from->on_cpu, false, __ATOMIC_RELEASE);
+}
+
+// A task's kernel stack must not be freed while its core is still switching
+// away from it (it exited, but cpu_switch has not left its stack yet).
+static void wait_off_cpu(const task_t *t) {
+    while (__atomic_load_n(&t->on_cpu, __ATOMIC_ACQUIRE)) {
+        asm volatile("yield");
+    }
 }
 
 static void check_kstack(const task_t *t) {
@@ -242,11 +287,10 @@ static void check_kstack(const task_t *t) {
     }
 }
 
-// Switch to the next runnable task, with sched_lock held and IRQs masked; the
-// caller has already set the running task's new state. Returns when this task
-// is switched back in, with sched_lock held again (taken over from the task
-// that switched to us). With nothing runnable, waits for an interrupt, with
-// sched_lock released so the handler can wake someone.
+// Switch to this core's next runnable task, or its idle task if there is
+// none, with sched_lock held and IRQs masked; the caller has already set the
+// running task's new state. Returns when this task is switched back in, with
+// sched_lock held again (taken over from the task that switched to us).
 static void switch_away(void) {
     struct cpu *c = this_cpu();
     task_t *prev = c->curr;
@@ -254,25 +298,50 @@ static void switch_away(void) {
         panic("switching away from pid %d with %d spinlocks held", prev->pid,
               c->locks_held);
     }
-    task_t *next = pick_next(prev);
-    while (next == NULL) {
-        spin_unlock(&sched_lock);
-        asm volatile("msr daifclr, #2\n\twfi\n\tmsr daifset, #2" ::: "memory");
-        spin_lock(&sched_lock);
-        next = pick_next(prev);
+    task_t *next = pick_next(c->id, prev);
+    if (next == NULL) {
+        next = c->idle;
     }
     if (next != prev) {
         check_kstack(prev);
         c->curr = next;
+        c->switched_from = prev;
+        next->on_cpu = true;
         fpsimd_switch_to(next);
         cpu_switch(&prev->ctx, &next->ctx);
+        finish_switch();
     }
 }
 
 // The first thing a new task runs (from ret_to_user): release the
 // sched_lock the switching task held for it.
 void schedule_tail(void) {
+    finish_switch();
     spin_unlock(&sched_lock);
+}
+
+// The idle loop: hand the core to any runnable task of its, otherwise wait
+// for an interrupt. Runs with IRQs masked except in WFI.
+static void idle_loop(void) __attribute__((noreturn));
+static void idle_loop(void) {
+    for (;;) {
+        uint64_t flags = spin_lock_irqsave(&sched_lock);
+        switch_away();  // returns at once if nothing is runnable
+        spin_unlock_irqrestore(&sched_lock, flags);
+        asm volatile("msr daifclr, #2\n\twfi\n\tmsr daifset, #2" ::: "memory");
+    }
+}
+
+// Core 0's idle task starts here the first time it is switched to.
+static void idle_entry(void) {
+    schedule_tail();
+    idle_loop();
+}
+
+void task_idle_forever(void) {
+    irq_disable();
+    idle_loop();
+    __builtin_unreachable();
 }
 
 // Give up the CPU after the caller marked the running task under sched_lock
@@ -299,7 +368,7 @@ static void make_runnable(task_t *t) {
     t->waiting_for = NULL;
     t->wq = NULL;
     t->wq_next = NULL;
-    this_cpu()->need_resched = true;
+    cpus[t->core].need_resched = true;  // its own core, maybe another one
 }
 
 // Block the running task until `child` (or, if NULL, any child) exits.
@@ -368,13 +437,20 @@ static void tick_task(task_t *t, uint64_t now) {
     }
 }
 
+// Every core's own tick: wake this core's due sleepers and end the running
+// task's slice. `now` is the system (core 0) tick count.
 void sched_tick(uint64_t now) {
+    struct cpu *c = this_cpu();
     spin_lock(&sched_lock);  // in the timer interrupt: IRQs masked
-    tick_task(&boot_task, now);
-    for (int i = 0; i < MAX_TASKS; i++) {
-        tick_task(&tasks[i], now);
+    if (c->id == 0) {
+        tick_task(&boot_task, now);
     }
-    this_cpu()->need_resched = true;  // round robin: the running slice is over
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].core == c->id) {
+            tick_task(&tasks[i], now);
+        }
+    }
+    c->need_resched = true;  // round robin: the running slice is over
     spin_unlock(&sched_lock);
 }
 
@@ -497,7 +573,28 @@ static int load_program(const char *name, struct loaded_prog *lp) {
     return 0;
 }
 
-task_t *task_create(const char *name, int argc, char *const argv[]) {
+// The core a new task gets: `requested` if it is online (else -1), or for -1
+// the online core with the fewest live tasks (runnable or blocked).
+static int choose_core(int requested) {
+    unsigned load[MAX_CPUS] = {0};
+    bool online[MAX_CPUS];
+    for (unsigned i = 0; i < MAX_CPUS; i++) {
+        online[i] = i == 0 || __atomic_load_n(&cpus[i].online, __ATOMIC_ACQUIRE);
+    }
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_state_t st = tasks[i].state;
+        if (st == TASK_RUNNABLE || st == TASK_BLOCKED) {
+            load[tasks[i].core]++;
+        }
+    }
+    return sched_place(load, online, MAX_CPUS, requested);
+}
+
+task_t *task_create(const char *name, int argc, char *const argv[], int core) {
+    core = choose_core(core);
+    if (core < 0) {
+        return NULL;  // a requested core that does not exist or is offline
+    }
     struct loaded_prog lp;
     if (load_program(name, &lp) != 0) {
         return NULL;
@@ -516,6 +613,7 @@ task_t *task_create(const char *name, int argc, char *const argv[]) {
         return NULL;
     }
     t->parent = task_current();
+    t->core = (unsigned)core;
     t->image = lp.image;
     t->image_pages = lp.image_pages;
     t->stack = stack;
@@ -563,14 +661,14 @@ task_t *task_create(const char *name, int argc, char *const argv[]) {
     t->ctx.lr = (uint64_t)ret_to_user;
     t->ctx.sp = (uint64_t)t->tf;
 
-    printf("  [pid %d] run '%s': entry=0x%lx sp=0x%lx (%d image pages)\n",
-           t->pid, name, lp.entry, sp, (int)t->image_pages);
+    printf("  [pid %d] run '%s' on cpu %u: entry=0x%lx sp=0x%lx (%d image pages)\n",
+           t->pid, name, t->core, lp.entry, sp, (int)t->image_pages);
     set_state(t, TASK_RUNNABLE);
     return t;
 }
 
 int task_spawn(const char *name, int argc, char *const argv[], int flags) {
-    task_t *child = task_create(name, argc, argv);
+    task_t *child = task_create(name, argc, argv, SPAWN_CORE_OF(flags));
     if (child == NULL) {
         return -1;
     }
@@ -628,7 +726,7 @@ int task_getpid(void) {
 
 task_t *task_current(void) {
     task_t *t = current;
-    return t != this_cpu()->idle ? t : NULL;
+    return t != &boot_task && t != this_cpu()->idle ? t : NULL;
 }
 
 task_t *task_running(void) {
@@ -694,6 +792,31 @@ size_t task_kstack_peak_max(void) {
         }
     }
     return peak;
+}
+
+int task_info_get(unsigned index, struct ktask_info *out) {
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    int found = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *t = &tasks[i];
+        if (t->state == TASK_UNUSED || index-- != 0) {
+            continue;
+        }
+        out->pid = t->pid;
+        out->ppid = t->parent != NULL ? t->parent->pid : 0;
+        out->core = t->core;
+        out->state = t->state == TASK_EXITED    ? 3
+                     : t->state == TASK_BLOCKED ? 2
+                     : t->on_cpu                ? 0
+                                                : 1;
+        for (unsigned n = 0; n < TASK_NAME_MAX; n++) {
+            out->name[n] = t->name[n];
+        }
+        found = 1;
+        break;
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+    return found;
 }
 
 void task_for_each(void (*fn)(const task_t *t, void *ctx), void *ctx) {

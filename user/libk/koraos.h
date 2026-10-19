@@ -159,6 +159,9 @@ void *memmove(void *dest, const void *src, size_t n);
  * are the simple forms: run to completion, then collect the exit code. A child
  * whose parent exits first is reaped by the kernel. */
 #define SPAWN_NOWAIT 1
+/* Run the child on core n (0..3); without it the kernel picks the online core
+ * with the fewest tasks. A task stays on its core for life. */
+#define SPAWN_CORE(n) ((((n) + 1) & 0xf) << 8)
 #define WNOHANG 1
 
 void exit(int status) __attribute__((noreturn));
@@ -177,6 +180,22 @@ void msleep(unsigned long ms);  /* at least ms milliseconds, in 10 ms ticks */
  * the Amiga; exiting ends it. */
 int forbid(void);
 int permit(void);
+
+/* One task, as task_info() reports it (the `ps` program). */
+#define TASK_NAME_MAX 16
+enum { TASK_RUNNING = 0, TASK_READY, TASK_SLEEPING, TASK_ZOMBIE };
+struct task_info {
+    int pid;
+    int ppid;                  /* 0: started by the kernel, or orphaned */
+    unsigned core;             /* the core it runs on, for life */
+    unsigned state;            /* TASK_RUNNING .. TASK_ZOMBIE */
+    char name[TASK_NAME_MAX];
+};
+
+/* Fill *out with the index-th live task (0, 1, ...): 1 if there is one, 0
+ * past the last, -1 on a bad pointer. Not a snapshot across calls: tasks may
+ * come and go in between. */
+int task_info(unsigned index, struct task_info *out);
 
 static inline int spawn(const char *name, int argc, char *const argv[]) {
     return spawn_flags(name, argc, argv, 0);

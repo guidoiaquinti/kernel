@@ -151,7 +151,8 @@ tests/run-qemu-smoke.py --target qemu_virt --keyboard --disk build/userfs/aarch6
 
 The test checks the boot line's build identifier (the git commit), the
 boot-time kernel heap self-test, and that every core came online (`--smp N`
-on virt, 1 to 4; raspi3b always has four), boots to the ELF shell,
+on virt, 1 to 4; raspi3b always has four; `--gic 3` for a GICv3 and, on an
+Apple Silicon Mac, `--accel hvf` to run on the host's cores), boots to the ELF shell,
 runs filesystem/argv/exit-code checks plus an EL0 namespace probe (child cwd
 inheritance and isolation, failed path handling, descriptors retained across
 chdir, volume/assign enumeration and assign syscall updates), checks shell

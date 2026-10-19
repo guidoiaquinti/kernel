@@ -176,8 +176,10 @@ There is no page-table sharing to manage.
    shared data), vector table, idle task, per-core timer and per-core interrupt
    controller setup (GIC CPU interface; BCM local controller on Pi 3). Cores
    idle in `wfi`. Circle is configured single-core and stays on core 0. The
-   boot line names the build's git commit. `docs/smp.md`. QEMU's hvf
-   accelerator needs a GICv3 driver: a separate, virt-only step before PR 5.
+   boot line names the build's git commit. `docs/smp.md`.
+   Then, as a virt-only step: a GICv3 driver (picked from the device tree)
+   and `--accel hvf`, so virt runs on an Apple Silicon Mac's own cores, truly
+   in parallel with weak memory ordering, for the scheduling PRs below.
 5. **Per-core scheduling and placement**: per-core run queues, least-loaded
    placement at spawn, an optional core argument to `spawn`, shell syntax for
    pinning, and a `ps`-style command showing which core each task runs on. All

@@ -36,14 +36,15 @@ class Failure(Exception):
 
 class Qemu:
     def __init__(self, qemu, kernel, outdir, machine="raspi3b", ram="256M", extra=(), el2=False,
-                 smp=1):
+                 smp=1, gic=2, accel="tcg"):
         self.outdir = outdir
         self.log = open(os.path.join(outdir, "serial.log"), "wb")
         self.pending = b""  # output not yet consumed by expect()
         # The monitor socket path is relative to QEMU's working directory:
         # UNIX socket paths are limited to ~104 bytes and temp dirs are long.
         machine_args = ["-M", "raspi3b"] if machine == "raspi3b" else [
-            "-M", "virt,gic-version=2,highmem=off" + (",virtualization=on" if el2 else ""), "-cpu", "cortex-a72",
+            "-M", "virt,gic-version=%d,highmem=off" % gic + (",virtualization=on" if el2 else ""),
+            *(["-accel", "hvf", "-cpu", "host"] if accel == "hvf" else ["-cpu", "cortex-a72"]),
             "-smp", str(smp), "-nic", "none", "-global", "virtio-mmio.force-legacy=false", "-m", ram]
         self.proc = subprocess.Popen(
             [qemu, *machine_args, *extra, "-kernel", kernel,
@@ -349,7 +350,7 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         deadline = time.monotonic() + 5
         while True:
             q.send("irqs\r")
-            q.expect(rb"^controller: (?:BCM2835 legacy|GICv2 \(virt\))")
+            q.expect(rb"^controller: (?:BCM2835 legacy|GICv[23] \(virt\))")
             m = q.expect(rb"^systick: (\d+) ticks, uptime (\d+)\.(\d+) s")
             ticks = int(m.group(1))
             uptime = int(m.group(2)) + int(m.group(3)) / 1000
@@ -661,6 +662,10 @@ def main():
     mode.add_argument("--debug", action="store_true")
     parser.add_argument("--ram", default="256M")
     parser.add_argument("--el2", action="store_true", help="enter virt via EL2 before dropping to EL1")
+    parser.add_argument("--gic", type=int, choices=(2, 3), default=2,
+                        help="virt interrupt controller version (hvf needs 3)")
+    parser.add_argument("--accel", choices=("tcg", "hvf"), default="tcg",
+                        help="virt on an Apple Silicon Mac: hvf runs on the host's cores")
     parser.add_argument("--smp", type=int, default=1,
                         help="virt cores (raspi3b always has 4); all must come online")
     parser.add_argument("--repeat", type=int, default=0, help="repeat the EL0 page/malloc/nested-process probe")
@@ -719,9 +724,13 @@ def main():
         parser.error("--smp must be between 1 and 4 (KoraOS manages up to 4 cores)")
     if args.smp != 1 and args.machine != "virt":
         parser.error("--smp applies to virt (raspi3b always has 4 cores)")
+    if (args.gic != 2 or args.accel != "tcg") and args.machine != "virt":
+        parser.error("--gic and --accel apply to virt")
+    if args.accel == "hvf" and (args.gic != 3 or args.el2):
+        parser.error("--accel hvf needs --gic 3 and no --el2 (hvf has no EL2)")
     cores = 4 if args.machine == "raspi3b" else args.smp
     q = Qemu(args.qemu, os.path.abspath(args.kernel), os.path.abspath(args.out), args.machine, args.ram,
-             extra, args.el2, args.smp)
+             extra, args.el2, args.smp, args.gic, args.accel)
     failed = False
     try:
         try:

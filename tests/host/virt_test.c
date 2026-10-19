@@ -111,7 +111,8 @@ static void discovery(void) {
     const struct virt_platform *p = virt_platform_get();
     CHECK(p->ram_base == 0x40000000 && p->ram_size == 0x08000000, "RAM discovery");
     CHECK(p->uart_base == 0x09100000 && p->uart_irq == 34, "dynamic UART discovery");
-    CHECK(p->gic_dist == 0x08100000 && p->gic_cpu == 0x08200000, "dynamic GIC discovery");
+    CHECK(p->gic_version == 2 && p->gic_dist == 0x08100000 && p->gic_cpu == 0x08200000,
+          "dynamic GIC discovery");
     CHECK(p->fw_cfg_base == 0x09020000, "fw_cfg discovery");
     CHECK(p->reserved_count == 3 && p->reserved[0].base == 0x41000000 &&
           p->reserved[1].base == 0x41234000 && p->reserved[1].size == 0x2000 &&
@@ -129,6 +130,20 @@ static void discovery(void) {
     put32(blob + irq_offset + 8, 1);
     CHECK(virt_platform_parse(blob, size), "rising-edge virtio IRQ rejected");
     CHECK(virt_platform_get()->virtio[31].edge_triggered, "edge IRQ type lost");
+}
+
+// The same machine with gic-version=3: distributor plus redistributor region.
+static void gicv3(void) {
+    size_t size = fixture(0);
+    for (size_t i = 0; i + 18 <= size; i++) {
+        if (blob[i] == 'a' && !__builtin_memcmp(blob + i, "arm,cortex-a15-gic", 18)) {
+            __builtin_memcpy(blob + i, "arm,gic-v3\0\0\0\0\0\0\0\0", 18);
+        }
+    }
+    CHECK(virt_platform_parse(blob, size), "GICv3 DTB rejected");
+    const struct virt_platform *p = virt_platform_get();
+    CHECK(p->gic_version == 3 && p->gic_dist == 0x08100000 && p->gic_redist == 0x08200000 &&
+          p->gic_redist_size == 0x10000 && p->gic_cpu == 0, "GICv3 discovery");
 }
 
 static void malformed(void) {
@@ -165,4 +180,4 @@ static void truncations(void) {
     }
 }
 
-TEST_MAIN(discovery, malformed, truncations)
+TEST_MAIN(discovery, gicv3, malformed, truncations)

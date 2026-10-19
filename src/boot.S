@@ -114,6 +114,18 @@ check_el2:
     orr x1, x1, #3
     msr cnthctl_el2, x1
     msr cntvoff_el2, xzr
+#ifdef KORAOS_VIRT
+    // A GICv3 CPU interface is system registers, which EL1 may only use if EL2
+    // allows it (ICC_SRE_EL2.Enable); otherwise its first ICC_* access traps.
+    mrs x1, id_aa64pfr0_el1
+    ubfx x1, x1, #24, #4        // GIC system register interface implemented?
+    cbz x1, 1f
+    mov x1, #0xf                // SRE | DFB | DIB | Enable (for EL1)
+    msr S3_4_C12_C9_5, x1       // ICC_SRE_EL2
+    isb
+    msr S3_4_C12_C11_0, xzr     // ICH_HCR_EL2: no virtual interrupts
+1:
+#endif
     ldr x1, =SPSR_VALUE_EL1     // return to EL1h, all interrupts masked
     msr spsr_el2, x1
     msr elr_el2, x2

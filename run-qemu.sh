@@ -9,6 +9,9 @@ Usage: ./run-qemu.sh [options] [-- QEMU arguments...]
   --build-dir DIR     Build root, as in build.sh (default: build beside script)
   --smp N             virt: cores to emulate, 1 to 4 (default 1, or KORA_QEMU_SMP);
                       raspi3b always has 4
+  --gic 2|3           virt: interrupt controller version (default 2)
+  --accel hvf         virt on an Apple Silicon Mac: run on the host's own cores
+                      (Hypervisor.framework, -cpu host, GICv3) instead of TCG
   --virt | --raspi3b   Deprecated aliases
 Environment: KORA_QEMU_TARGET, KORA_QEMU_SMP, KORA_QEMU_RAM, KORA_QEMU_RAMFB,
  KORA_QEMU_KEYBOARD, KORA_QEMU_DISK, KORA_QEMU_DISK_READONLY,
@@ -23,6 +26,8 @@ target="${KORA_QEMU_TARGET:-qemu_raspi3b}"
 build_root="${BUILD_DIR:-$script_dir/build}"
 build_type="${BUILD_TYPE:-Debug}"
 smp="${KORA_QEMU_SMP:-1}"
+gic=2
+accel=tcg
 extra_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -31,6 +36,8 @@ while [[ $# -gt 0 ]]; do
         --release) build_type=Release; shift ;;
         --build-dir) require_value "$@"; build_root="$2"; shift 2 ;;
         --smp) require_value "$@"; smp="$2"; shift 2 ;;
+        --gic) require_value "$@"; gic="$2"; shift 2 ;;
+        --accel) require_value "$@"; accel="$2"; shift 2 ;;
         --virt) echo "Deprecated: --virt; use --target qemu_virt" >&2; target=qemu_virt; shift ;;
         --raspi3b) echo "Deprecated: --raspi3b; use --target qemu_raspi3b" >&2; target=qemu_raspi3b; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -46,6 +53,12 @@ esac
 case "$build_type" in Debug|debug) configuration=debug ;; Release|release) configuration=release ;; *) fail "BUILD_TYPE must be Debug or Release" ;; esac
 case "$target" in qemu_raspi3b|qemu_virt) ;; *) fail "Unsupported QEMU target: $target" ;; esac
 [[ "$smp" =~ ^[1-4]$ ]] || fail "--smp must be 1 to 4"
+case "$gic" in 2|3) ;; *) fail "--gic must be 2 or 3" ;; esac
+case "$accel" in tcg) cpu_args=(-cpu cortex-a72) ;; hvf) cpu_args=(-accel hvf -cpu host); gic=3 ;;
+    *) fail "--accel must be tcg or hvf" ;; esac
+if [[ "$target" != qemu_virt && ( "$gic" != 2 || "$accel" != tcg ) ]]; then
+    fail "--gic and --accel apply to --target qemu_virt"
+fi
 command -v python3 >/dev/null || fail "Python3 is required"
 normalize_path() { python3 -c 'import os,sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"; }
 build_root=$(normalize_path "$build_root")
@@ -54,7 +67,7 @@ kernel_img="$build_root/$configuration/$target/kernel.img"
 if [[ "$target" == qemu_raspi3b ]]; then
     machine_args=(-M raspi3b)
 else
-    machine_args=(-M virt,gic-version=2,highmem=off -cpu cortex-a72 -smp "$smp" -nic none
+    machine_args=(-M "virt,gic-version=$gic,highmem=off" "${cpu_args[@]}" -smp "$smp" -nic none
         -global virtio-mmio.force-legacy=false -m "${KORA_QEMU_RAM:-256M}")
     if [[ "${KORA_QEMU_RAMFB:-1}" == 1 ]]; then machine_args+=(-device ramfb); fi
     if [[ "${KORA_QEMU_KEYBOARD:-1}" == 1 ]]; then machine_args+=(-device virtio-keyboard-device); fi

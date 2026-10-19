@@ -28,6 +28,11 @@ void irq_connect(unsigned irq, irq_handler_t handler, void *ctx);
 // Disable an IRQ in the controller and unregister its handler.
 void irq_disconnect(unsigned irq);
 
+// Secondary cores: set up this core's side of the interrupt controller, and
+// enable a per-core IRQ (the generic timer) whose handler core 0 connected.
+void irq_init_this_core(void);
+void irq_enable_this_core(unsigned irq);
+
 // Unmask / mask IRQs at the CPU (PSTATE.I / DAIF).
 void irq_enable(void);
 void irq_disable(void);

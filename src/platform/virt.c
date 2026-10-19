@@ -59,6 +59,8 @@ struct node {
     size_t interrupts_len;
     bool memory, uart, gic, fw_cfg, virtio, disabled, translated_bus;
     bool reserved_children, reserved;
+    bool cpu, psci;
+    enum virt_psci_method method;
 };
 
 static bool reg_region(const struct node *n, unsigned index,
@@ -97,8 +99,33 @@ static bool gic_irq(const struct node *n, unsigned *irq, bool *edge) {
     return true;
 }
 
+// A /cpus/cpu@N node: its reg is the core's MPIDR affinity, in the parent's
+// #address-cells (1 or 2) with no size.
+static bool finish_cpu(const struct node *n, struct virt_platform *out) {
+    unsigned cells = n->parent_address_cells;
+    if ((cells != 1 && cells != 2) || n->reg_len < cells * 4u) {
+        return false;
+    }
+    uint64_t mpidr = be32(n->reg);
+    if (cells == 2) {
+        mpidr = mpidr << 32 | be32(n->reg + 4);
+    }
+    if (out->cpu_count < VIRT_MAX_CPUS) {
+        out->cpu_mpidr[out->cpu_count] = mpidr;
+    }
+    out->cpu_count++;
+    return true;
+}
+
 static bool finish_node(const struct node *n, unsigned depth, struct virt_platform *out) {
     if (n->disabled) {
+        return true;
+    }
+    if (n->cpu) {
+        return depth == 3 ? finish_cpu(n, out) : false;
+    }
+    if (n->psci) {
+        out->psci_method = n->method;
         return true;
     }
     if (!(n->memory || n->uart || n->gic || n->fw_cfg || n->virtio || n->reserved)) {
@@ -287,8 +314,15 @@ bool virt_platform_parse(const void *dtb, size_t available) {
                          compatible(value, len, "arm,gic-400");
                 n->fw_cfg = compatible(value, len, "qemu,fw-cfg-mmio");
                 n->virtio = compatible(value, len, "virtio,mmio");
+                n->psci = compatible(value, len, "arm,psci-0.2") ||
+                          compatible(value, len, "arm,psci-1.0");
+            } else if (string_is(key, key_len, "method")) {
+                n->method = string_is(value, len, "hvc")   ? VIRT_PSCI_HVC
+                            : string_is(value, len, "smc") ? VIRT_PSCI_SMC
+                                                           : VIRT_PSCI_NONE;
             } else if (string_is(key, key_len, "device_type")) {
                 n->memory = string_is(value, len, "memory");
+                n->cpu = string_is(value, len, "cpu");
             } else if (string_is(key, key_len, "reg")) {
                 n->reg = value;
                 n->reg_len = len;

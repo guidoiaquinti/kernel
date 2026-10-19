@@ -116,6 +116,17 @@ set_source_files_properties("${FS_BLOB_ASM}" PROPERTIES
 
 list(APPEND KERNEL_SOURCES "${FS_BLOB_ASM}")
 
+# The build identifier (git commit) printed at boot: regenerated on every
+# build, rewritten only when it changes (see cmake/build-id.cmake).
+set(BUILD_ID_SOURCE "${CMAKE_BINARY_DIR}/generated/build_id.c")
+add_custom_target(build_id
+    COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT=${BUILD_ID_SOURCE} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-id.cmake"
+    BYPRODUCTS "${BUILD_ID_SOURCE}"
+    COMMENT "Checking the build identifier"
+    VERBATIM)
+list(APPEND KERNEL_SOURCES "${BUILD_ID_SOURCE}")
+
 # Common compiler flags
 set(COMMON_FLAGS
     --target=aarch64-none-elf
@@ -200,7 +211,7 @@ function(add_kernel_variant VARIANT)
         list(FILTER variant_sources EXCLUDE REGEX "/(platform/|drivers/virtio)")
     endif()
     add_executable(${target} ${variant_sources})
-    add_dependencies(${target} filesystem_image)
+    add_dependencies(${target} filesystem_image build_id)
 
     set_target_properties(${target} PROPERTIES
         OUTPUT_NAME ${KVAR_OUTPUT_NAME}

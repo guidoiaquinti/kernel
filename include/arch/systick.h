@@ -15,6 +15,9 @@ extern "C" {
 // first and irq_enable() to actually fire.
 void systick_init(unsigned hz);
 
+// Secondary cores: start this core's own tick (core 0 called systick_init).
+void systick_init_this_core(void);
+
 // Ticks elapsed since systick_init(), and the tick rate (0 before init).
 uint64_t systick_count(void);
 unsigned systick_hz(void);

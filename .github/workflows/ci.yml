@@ -114,7 +114,7 @@ jobs:
       matrix:
         include:
           - profile: embedded-graphics
-            args: --repeat 64
+            args: --repeat 64 --smp 4
           - profile: disk-keyboard
             args: --ram 128M --disk build/userfs/aarch64/koraos.img --keyboard --repeat 256
           - profile: mbr-disk
@@ -126,7 +126,7 @@ jobs:
           - profile: serial-small-ram
             args: --ram 64M --no-graphics --repeat 32
           - profile: el2-entry
-            args: --el2 --no-graphics --repeat 32
+            args: --el2 --no-graphics --repeat 32 --smp 4
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7

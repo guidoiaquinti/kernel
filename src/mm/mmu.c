@@ -85,7 +85,7 @@ void mmu_set_firmware_page_writable(int writable) {
     l3_low_table[0] = 0 | MMU_PAGE_FLAGS(writable ? MMU_NORMAL_BLOCK_FLAGS
                                                   : MMU_CODE_BLOCK_FLAGS);
     asm volatile("dsb ishst" ::: "memory");
-    asm volatile("tlbi vaae1, %0" ::"r"(0UL) : "memory");
+    asm volatile("tlbi vaae1is, %0" ::"r"(0UL) : "memory");
     asm volatile("dsb ish" ::: "memory");
     asm volatile("isb");
 #endif
@@ -140,8 +140,14 @@ static void build_identity_map(void) {
 }
 
 void mmu_init(void) {
+    // Built with this core's caches still off, so the tables are already in
+    // memory for the other cores' table walks (cacheable and coherent once
+    // their MMUs are on; later changes use broadcast TLB maintenance).
     build_identity_map();
+    mmu_enable_this_core();
+}
 
+void mmu_enable_this_core(void) {
     // Physical address size supported by the CPU (PARange), clamped to 48-bit.
     uint64_t mmfr0;
     asm volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));

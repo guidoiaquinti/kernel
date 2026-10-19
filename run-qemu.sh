@@ -7,8 +7,10 @@ Usage: ./run-qemu.sh [options] [-- QEMU arguments...]
   --target NAME       qemu_raspi3b (default) or qemu_virt
   --debug | --release Select matching build configuration (default: Debug)
   --build-dir DIR     Build root, as in build.sh (default: build beside script)
+  --smp N             virt: cores to emulate, 1 to 4 (default 1, or KORA_QEMU_SMP);
+                      raspi3b always has 4
   --virt | --raspi3b   Deprecated aliases
-Environment: KORA_QEMU_TARGET, KORA_QEMU_RAM, KORA_QEMU_RAMFB,
+Environment: KORA_QEMU_TARGET, KORA_QEMU_SMP, KORA_QEMU_RAM, KORA_QEMU_RAMFB,
  KORA_QEMU_KEYBOARD, KORA_QEMU_DISK, KORA_QEMU_DISK_READONLY,
  KORA_QEMU_FB and KORA_QEMU_DISPLAY retain their existing meanings.
 Unrecognized arguments are passed to QEMU unchanged.
@@ -20,6 +22,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 target="${KORA_QEMU_TARGET:-qemu_raspi3b}"
 build_root="${BUILD_DIR:-$script_dir/build}"
 build_type="${BUILD_TYPE:-Debug}"
+smp="${KORA_QEMU_SMP:-1}"
 extra_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -27,6 +30,7 @@ while [[ $# -gt 0 ]]; do
         --debug) build_type=Debug; shift ;;
         --release) build_type=Release; shift ;;
         --build-dir) require_value "$@"; build_root="$2"; shift 2 ;;
+        --smp) require_value "$@"; smp="$2"; shift 2 ;;
         --virt) echo "Deprecated: --virt; use --target qemu_virt" >&2; target=qemu_virt; shift ;;
         --raspi3b) echo "Deprecated: --raspi3b; use --target qemu_raspi3b" >&2; target=qemu_raspi3b; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -41,6 +45,7 @@ case "$target" in
 esac
 case "$build_type" in Debug|debug) configuration=debug ;; Release|release) configuration=release ;; *) fail "BUILD_TYPE must be Debug or Release" ;; esac
 case "$target" in qemu_raspi3b|qemu_virt) ;; *) fail "Unsupported QEMU target: $target" ;; esac
+[[ "$smp" =~ ^[1-4]$ ]] || fail "--smp must be 1 to 4"
 command -v python3 >/dev/null || fail "Python3 is required"
 normalize_path() { python3 -c 'import os,sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"; }
 build_root=$(normalize_path "$build_root")
@@ -49,7 +54,7 @@ kernel_img="$build_root/$configuration/$target/kernel.img"
 if [[ "$target" == qemu_raspi3b ]]; then
     machine_args=(-M raspi3b)
 else
-    machine_args=(-M virt,gic-version=2,highmem=off -cpu cortex-a72 -smp 1 -nic none
+    machine_args=(-M virt,gic-version=2,highmem=off -cpu cortex-a72 -smp "$smp" -nic none
         -global virtio-mmio.force-legacy=false -m "${KORA_QEMU_RAM:-256M}")
     if [[ "${KORA_QEMU_RAMFB:-1}" == 1 ]]; then machine_args+=(-device ramfb); fi
     if [[ "${KORA_QEMU_KEYBOARD:-1}" == 1 ]]; then machine_args+=(-device virtio-keyboard-device); fi

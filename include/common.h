@@ -5,6 +5,16 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// The git commit the kernel was built from ("-dirty" with local changes),
+// generated at build time by cmake/build-id.cmake.
+extern const char koraos_build_id[];
+#ifdef __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef unsigned int uint32_t;
 typedef long unsigned int size_t;

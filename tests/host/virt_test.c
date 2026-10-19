@@ -4,7 +4,7 @@
 
 static uint8_t blob[8192];
 static uint8_t names[2048];
-static size_t pos, name_pos, irq_offset, ram_size_offset;
+static size_t pos, name_pos, irq_offset, ram_size_offset, psci_method_offset;
 
 static void put32(uint8_t *p, uint32_t v) {
     p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
@@ -78,6 +78,17 @@ static size_t fixture(unsigned virtio_count) {
     for (unsigned i = 0; i < virtio_count; i++) {
         device("virtio_mmio", "virtio,mmio", 0x0a000000 + 0x1000 * i, 16 + i);
     }
+    // Two cores (MPIDR 0 and 1) brought up through PSCI over HVC, as QEMU
+    // describes them without EL2.
+    begin("cpus"); cell("#address-cells", 1); cell("#size-cells", 0);
+    begin("cpu@0"); text("device_type", "cpu"); text("compatible", "arm,cortex-a72");
+    cell("reg", 0); text("enable-method", "psci"); word(2);
+    begin("cpu@1"); text("device_type", "cpu"); text("compatible", "arm,cortex-a72");
+    cell("reg", 1); text("enable-method", "psci"); word(2);
+    word(2);
+    begin("psci");
+    prop("compatible", "arm,psci-1.0\0arm,psci-0.2\0arm,psci", 35);
+    psci_method_offset = prop("method", "hvc", 4); word(2);
     begin("reserved-memory"); cell("#address-cells", 2); cell("#size-cells", 2);
     prop("ranges", NULL, 0); begin("test@41234000");
     uint8_t reserved[32] = {0};
@@ -108,6 +119,13 @@ static void discovery(void) {
           "reserve map and reserved-memory discovery");
     CHECK(p->virtio_count == 32 && p->virtio[31].irq == 79, "all virtio slots discovered");
     CHECK(p->dtb_base == (uintptr_t)blob && p->dtb_size == size, "DTB reservation metadata");
+    CHECK(p->cpu_count == 2 && p->cpu_mpidr[0] == 0 && p->cpu_mpidr[1] == 1,
+          "CPU discovery (%u cores)", p->cpu_count);
+    CHECK(p->psci_method == VIRT_PSCI_HVC, "PSCI method hvc");
+    blob[psci_method_offset] = 's'; blob[psci_method_offset + 1] = 'm';
+    CHECK(virt_platform_parse(blob, size) && virt_platform_get()->psci_method == VIRT_PSCI_SMC,
+          "PSCI method smc");
+    blob[psci_method_offset] = 'h'; blob[psci_method_offset + 1] = 'v';
     put32(blob + irq_offset + 8, 1);
     CHECK(virt_platform_parse(blob, size), "rising-edge virtio IRQ rejected");
     CHECK(virt_platform_get()->virtio[31].edge_triggered, "edge IRQ type lost");

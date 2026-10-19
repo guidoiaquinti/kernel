@@ -170,12 +170,14 @@ There is no page-table sharing to manage.
    local mask and now broadcasts its TLB invalidation; Circle stays
    single-core on core 0. A locked `printf` with a panic bypass, and
    `panic()`. Lock order and rules: `docs/locking.md`. Still one core.
-4. **Secondary core bring-up**: PSCI `CPU_ON` on virt, the firmware spin table on
-   Pi 3/Pi 4. Per-core stack, EL1 drop, shared MMU tables (MMU and caches on
-   before touching any lock), vector table, per-core timer and per-core
-   interrupt controller setup (GIC CPU interface; BCM local interrupt controller
-   on Pi 3). Cores idle in `wfi`. Confirm the vendored Circle configuration
-   before starting.
+4. **Secondary core bring-up** (done): PSCI `CPU_ON` on virt (`hvc` or `smc`
+   from the device tree), the firmware spin table on Pi 3/Pi 4. Per-core stack,
+   EL1 drop, shared MMU tables (MMU and caches on before touching any lock or
+   shared data), vector table, idle task, per-core timer and per-core interrupt
+   controller setup (GIC CPU interface; BCM local controller on Pi 3). Cores
+   idle in `wfi`. Circle is configured single-core and stays on core 0. The
+   boot line names the build's git commit. `docs/smp.md`. QEMU's hvf
+   accelerator needs a GICv3 driver: a separate, virt-only step before PR 5.
 5. **Per-core scheduling and placement**: per-core run queues, least-loaded
    placement at spawn, an optional core argument to `spawn`, shell syntax for
    pinning, and a `ps`-style command showing which core each task runs on. All

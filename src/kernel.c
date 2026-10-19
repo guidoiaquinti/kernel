@@ -2,6 +2,7 @@
 #include "arch/exception.h"
 #include "arch/irq.h"
 #include "arch/percpu.h"
+#include "arch/smp.h"
 #include "arch/systick.h"
 #ifdef KORAOS_VIRT
 #include "platform/virt.h"
@@ -47,8 +48,11 @@ void kernel_main(uintptr_t dtb) {
   (void)dtb;
 #endif
   uart_init();
-  uart_putc('K');
-  uart_putc('\n');
+  // First words on the UART: which kernel this is, down to the commit, so a
+  // log always shows whether the board runs the build you think it does.
+  uart_puts("KoraOS " KORAOS_VERSION " (");
+  uart_puts(koraos_build_id);
+  uart_puts(")\n");
 
   init_printf(NULL, putc);  // unlocked until printf_lock_init() below
 
@@ -90,6 +94,11 @@ void kernel_main(uintptr_t dtb) {
   irq_init();
   systick_init(100);
   irq_enable();
+
+  // Bring up the other cores: each turns its MMU on, sets up its own
+  // interrupt controller interface and tick, and idles. Device interrupts and
+  // Circle stay on this core.
+  smp_start_secondaries();
 
   // Bring up the vendored Circle USB stack on the KoraOS HAL bridge. Enumeration
   // talks to real USB hardware, which QEMU's raspi3b does not emulate, so only

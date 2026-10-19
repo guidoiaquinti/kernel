@@ -35,7 +35,8 @@ class Failure(Exception):
 
 
 class Qemu:
-    def __init__(self, qemu, kernel, outdir, machine="raspi3b", ram="256M", extra=(), el2=False):
+    def __init__(self, qemu, kernel, outdir, machine="raspi3b", ram="256M", extra=(), el2=False,
+                 smp=1):
         self.outdir = outdir
         self.log = open(os.path.join(outdir, "serial.log"), "wb")
         self.pending = b""  # output not yet consumed by expect()
@@ -43,7 +44,7 @@ class Qemu:
         # UNIX socket paths are limited to ~104 bytes and temp dirs are long.
         machine_args = ["-M", "raspi3b"] if machine == "raspi3b" else [
             "-M", "virt,gic-version=2,highmem=off" + (",virtualization=on" if el2 else ""), "-cpu", "cortex-a72",
-            "-smp", "1", "-nic", "none", "-global", "virtio-mmio.force-legacy=false", "-m", ram]
+            "-smp", str(smp), "-nic", "none", "-global", "virtio-mmio.force-legacy=false", "-m", ram]
         self.proc = subprocess.Popen(
             [qemu, *machine_args, *extra, "-kernel", kernel,
              "-serial", "stdio", "-display", "none",
@@ -186,7 +187,7 @@ def near(actual, expected, tolerance=8):
 PROMPT = rb"^\$ "
 
 
-def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False):
+def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1):
     """Yield (name, check) steps; each check raises Failure on error."""
 
     def boot():
@@ -366,6 +367,39 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         q.send("\x14")
         q.expect(rb"\[serial -> screen terminal")
     yield "irqs shows the system tick and the UART interrupt", irqs
+
+    def per_core_ticks():
+        def read_cpus():
+            q.send("cpus\r")
+            ticks = {}
+            while True:
+                m = q.expect(rb"^\s+(\d+)\s+(online|offline)(?:\s+(\d+)\s+(\S+))?\r?\n|"
+                             rb"^cpus: (\d+) online, this is cpu (\d+)")
+                if m.group(5):
+                    if int(m.group(5)) != cores or m.group(6) != b"0":
+                        raise Failure("cpus reports %s online on cpu %s, want %d on cpu 0"
+                                      % (m.group(5).decode(), m.group(6).decode(), cores))
+                    break
+                if m.group(2) == b"online":
+                    ticks[int(m.group(1))] = (int(m.group(3)), m.group(4).decode())
+            q.expect(rb"koraos> ")
+            return ticks
+        q.send("\x14")
+        q.expect(rb"koraos> ")
+        first = read_cpus()
+        time.sleep(0.3)
+        second = read_cpus()
+        q.send("\x14")
+        q.expect(rb"\[serial -> screen terminal")
+        if sorted(second) != list(range(cores)):
+            raise Failure("online cores %s, want 0..%d" % (sorted(second), cores - 1))
+        for core in range(cores):
+            if second[core][0] <= first[core][0]:
+                raise Failure("cpu %d's own timer did not tick (%d -> %d)"
+                              % (core, first[core][0], second[core][0]))
+            if core and second[core][1] != "idle%d" % core:
+                raise Failure("cpu %d runs %s, want its idle task" % (core, second[core][1]))
+    yield "every core is online with its own timer ticking", per_core_ticks
 
     def kernel_heap():
         def heap_stats():
@@ -627,6 +661,8 @@ def main():
     mode.add_argument("--debug", action="store_true")
     parser.add_argument("--ram", default="256M")
     parser.add_argument("--el2", action="store_true", help="enter virt via EL2 before dropping to EL1")
+    parser.add_argument("--smp", type=int, default=1,
+                        help="virt cores (raspi3b always has 4); all must come online")
     parser.add_argument("--repeat", type=int, default=0, help="repeat the EL0 page/malloc/nested-process probe")
     parser.add_argument("--expect-root-failure", action="store_true", help="require a configured disk mount failure")
     parser.add_argument("--keyboard", action="store_true", help="inject keys through a VirtIO keyboard")
@@ -679,13 +715,30 @@ def main():
         extra += ["-drive", "if=none,id=root,format=raw,file=%s,readonly=%s" %
                   (os.path.abspath(args.disk), "off" if args.disk_writable else "on"),
                   "-device", "virtio-blk-device,drive=root"]
-    q = Qemu(args.qemu, os.path.abspath(args.kernel), os.path.abspath(args.out), args.machine, args.ram, extra, args.el2)
+    if args.smp < 1 or args.smp > 4:
+        parser.error("--smp must be between 1 and 4 (KoraOS manages up to 4 cores)")
+    if args.smp != 1 and args.machine != "virt":
+        parser.error("--smp applies to virt (raspi3b always has 4 cores)")
+    cores = 4 if args.machine == "raspi3b" else args.smp
+    q = Qemu(args.qemu, os.path.abspath(args.kernel), os.path.abspath(args.out), args.machine, args.ram,
+             extra, args.el2, args.smp)
     failed = False
     try:
         try:
+            # The first line names the build (git commit, "-dirty" for local
+            # changes), so a log always shows which kernel ran.
+            m = q.expect(rb"^KoraOS \d+\.\d+ \(([0-9a-zA-Z.+-]+)\)\r?\n", timeout=90)
+            build = m.group(1).decode()
+            if build == "unknown" and os.path.isdir(os.path.join(ROOT, ".git")):
+                raise Failure("boot line has no build identifier in a git checkout")
+            print("ok   - boot line names the build (%s)" % build)
             # The kernel heap checks itself before any later bring-up step
             # uses it; it is also the first sign the kernel booted at all.
             q.expect(rb"^\[heap\] self-test ok, \d+ of \d+ pages free", timeout=90)
+            m = q.expect(rb"^smp: (\d+) cores? online", timeout=30)
+            if int(m.group(1)) != cores:
+                raise Failure("%s of %d cores came online" % (m.group(1).decode(), cores))
+            print("ok   - %d core%s online" % (cores, "s" if cores > 1 else ""))
         except Failure as e:
             print("FAIL - kernel boots (heap self-test): %s" % e)
             print("qemu smoke: FAILED (artifacts in %s)" % args.out)
@@ -699,7 +752,8 @@ def main():
             return
         if args.keyboard:
             q.expect(rb"\[virtio-input\] keyboard ready")
-        for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume, args.write_test):
+        for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume,
+                               args.write_test, cores):
             try:
                 check()
                 print("ok   - " + name)

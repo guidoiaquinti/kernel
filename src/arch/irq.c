@@ -41,6 +41,16 @@ void irq_connect(unsigned irq, irq_handler_t handler, void *ctx) {
     intc_enable(irq);
 }
 
+void irq_init_this_core(void) {
+    intc_init_cpu();
+}
+
+void irq_enable_this_core(unsigned irq) {
+    if (irq < IRQ_COUNT) {
+        intc_enable(irq);
+    }
+}
+
 void irq_disconnect(unsigned irq) {
     if (irq >= IRQ_COUNT) {
         return;

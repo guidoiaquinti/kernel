@@ -6,8 +6,11 @@
 
 struct cpu cpus[MAX_CPUS];
 
+void percpu_attach(unsigned id) {
+    asm volatile("msr tpidr_el1, %0" ::"r"(&cpus[id]) : "memory");
+}
+
 void percpu_init(unsigned id) {
-    struct cpu *c = &cpus[id];
-    c->id = id;
-    asm volatile("msr tpidr_el1, %0" ::"r"(c) : "memory");
+    percpu_attach(id);
+    cpus[id].id = id;
 }

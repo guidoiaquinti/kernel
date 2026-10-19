@@ -9,10 +9,16 @@
 // Controller name, for diagnostics.
 extern const char intc_name[];
 
-// Bring the controller up with every IRQ disabled and nothing pending.
+// Bring the controller up with every IRQ disabled and nothing pending (core 0).
 void intc_init(void);
 
-// Enable / disable one IRQ at the controller (routing it to core 0).
+// Set up the calling core's side of the controller (secondary cores): the GIC
+// CPU interface, or nothing routed to it on the BCM local controller.
+void intc_init_cpu(void);
+
+// Enable / disable one IRQ at the controller. Peripheral (shared) IRQs are
+// routed to core 0; per-core sources (the generic timer: a GIC PPI, or a BCM
+// local timer event) are enabled for the calling core.
 void intc_enable(unsigned irq);
 void intc_disable(unsigned irq);
 

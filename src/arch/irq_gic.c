@@ -56,9 +56,13 @@ void intc_init(void) {
 #endif
 
     write32(GICD_CTLR, GICD_CTLR_ENABLE);
+    intc_init_cpu();
+}
 
-    // Core 0's CPU interface: let every priority through.
-    write32(GICC_PMR, GICC_PMR_ALLOW_ALL);
+// The CPU interface, and the SGI/PPI enables in GICD_ISENABLER0, are banked:
+// each core sets up its own.
+void intc_init_cpu(void) {
+    write32(GICC_PMR, GICC_PMR_ALLOW_ALL);  // let every priority through
     write32(GICC_CTLR, GICC_CTLR_ENABLE);
     asm volatile("dsb sy" ::: "memory");
 }

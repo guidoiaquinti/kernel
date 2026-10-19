@@ -9,6 +9,8 @@
 #include "mm.h"
 #include "mm/frame_alloc.h"
 #include "mm/kmalloc.h"
+#include "arch/percpu.h"
+#include "arch/smp.h"
 #include "proc/task.h"
 #include "utils.h"
 
@@ -31,6 +33,7 @@ void console_cmd_help(const char *args) {
   uart_puts("  heap - Show kernel heap and page pool usage\n");
   uart_puts("  heaptest [rounds] - Stress the kernel heap (default 2000 rounds)\n");
   uart_puts("  tasks - List tasks with their state and kernel stack use\n");
+  uart_puts("  cpus - List cores with their timer ticks and current task\n");
   uart_puts("Ctrl-T switches the serial line between this console and the\n");
   uart_puts("screen terminal (the shell).\n");
 }
@@ -40,7 +43,7 @@ void console_cmd_get_el(const char *args) {
 }
 
 void console_cmd_version(const char *args) {
-  printf("KoraOS version %s\n", KORAOS_VERSION);
+  printf("KoraOS version %s (%s)\n", KORAOS_VERSION, koraos_build_id);
 }
 
 // Interrupt health at a glance: the tick count should track the uptime (100 per
@@ -129,6 +132,24 @@ void console_cmd_tasks(const char *args) {
   }
 }
 
+// Every core: online, its own timer interrupts, and what it is running.
+void console_cmd_cpus(const char *args) {
+  (void)args;
+  printf("  cpu  state     ticks  running\n");
+  for (unsigned i = 0; i < MAX_CPUS; i++) {
+    const struct cpu *c = &cpus[i];
+    bool up = i == 0 || __atomic_load_n(&c->online, __ATOMIC_ACQUIRE);
+    if (!up) {
+      printf("  %3u  offline\n", i);
+      continue;
+    }
+    const struct task *t = c->curr;
+    printf("  %3u  online  %7lu  %s\n", i, (unsigned long)c->ticks,
+           t != NULL ? t->name : "-");
+  }
+  printf("cpus: %u online, this is cpu %u\n", smp_cores_online(), this_cpu()->id);
+}
+
 console_command_t commands[] = {
     {"help", "Show available commands", console_cmd_help},
     {"get_el", "Get the current Exception Level", console_cmd_get_el},
@@ -137,6 +158,7 @@ console_command_t commands[] = {
     {"heap", "Show kernel heap and page pool usage", console_cmd_heap},
     {"heaptest", "Stress the kernel heap", console_cmd_heaptest},
     {"tasks", "List tasks and kernel stack use", console_cmd_tasks},
+    {"cpus", "List cores, their ticks and current tasks", console_cmd_cpus},
     {NULL, NULL, NULL},
 };
 

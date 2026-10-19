@@ -16,6 +16,11 @@ struct virt_mmio_device {
     bool edge_triggered;
 };
 
+#define VIRT_MAX_CPUS 8
+
+// How to reach PSCI firmware calls (CPU_ON), from the /psci node's method.
+enum virt_psci_method { VIRT_PSCI_NONE = 0, VIRT_PSCI_HVC, VIRT_PSCI_SMC };
+
 struct virt_platform {
     uintptr_t ram_base;
     size_t ram_size;
@@ -30,6 +35,9 @@ struct virt_platform {
     struct virt_reserved_region reserved[VIRT_MAX_RESERVED];
     unsigned virtio_count;
     struct virt_mmio_device virtio[VIRT_MAX_VIRTIO];
+    unsigned cpu_count;                    // /cpus/cpu@N nodes, in DTB order
+    uint64_t cpu_mpidr[VIRT_MAX_CPUS];     // their MPIDR affinity (reg)
+    enum virt_psci_method psci_method;
 };
 
 // Direct-kernel boot passes the DTB in x0; ELF boot places it at RAM base.

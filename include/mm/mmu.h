@@ -23,6 +23,11 @@ void mmu_init(void);
 // data in them becomes uncached too.
 void mmu_map_coherent(uintptr_t base, size_t size);
 
+// Turn this core's MMU and caches on with the shared identity map that
+// mmu_init() built on core 0 (secondary cores call this). Marks the core's
+// per-CPU data caches_on, so spinlocks become usable on it.
+void mmu_enable_this_core(void);
+
 // Make page 0 (firmware data: the ARM stub's spin table and, at 0xF8, the
 // device-tree pointer) writable, or read-only again. It is read-only by default
 // so that NULL-pointer writes fault; Circle's CMachineInfo clears the

@@ -93,7 +93,11 @@ builds.
 ./run-qemu.sh --target qemu_virt
 KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 ./run-qemu.sh --target qemu_virt --release --build-dir my-build -s -S
+./run-qemu.sh --target qemu_virt --smp 4
 ```
+
+`--smp N` (or `KORA_QEMU_SMP`) gives virt 1 to 4 cores (default 1); QEMU
+raspi3b always has four. See [smp.md](smp.md).
 
 The launcher uses the matching configuration's `kernel.img` and forwards extra
 QEMU arguments. Ctrl-A X quits. `KORA_QEMU_DISPLAY` overrides the native display

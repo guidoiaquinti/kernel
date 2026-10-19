@@ -149,13 +149,17 @@ tests/run-qemu-smoke.py --target qemu_raspi3b
 tests/run-qemu-smoke.py --target qemu_virt --keyboard --disk build/userfs/aarch64/koraos.img --repeat 256
 ```
 
-The test checks the boot-time kernel heap self-test, boots to the ELF shell,
+The test checks the boot line's build identifier (the git commit), the
+boot-time kernel heap self-test, and that every core came online (`--smp N`
+on virt, 1 to 4; raspi3b always has four), boots to the ELF shell,
 runs filesystem/argv/exit-code checks plus an EL0 namespace probe (child cwd
 inheritance and isolation, failed path handling, descriptors retained across
 chdir, volume/assign enumeration and assign syscall updates), checks shell
 `cd`/`pwd`/`volumes`/`assign`, current-directory `ls`, and excess-argument
 rejection followed by a valid command, switches to the debug console,
-verifies timer/UART IRQ progress, runs `heaptest` (seeded kernel heap stress)
+verifies timer/UART IRQ progress, checks with `cpus` that every core is online
+running its idle task (cores 1 and up) and that each core's own timer ticks,
+runs `heaptest` (seeded kernel heap stress)
 and checks that `heap` reports no leaks or bad frees, runs `fpprobe` (a parent
 and child each fill all 32 vector registers and FPCR; the child must start from
 zeroed registers and the parent's must survive), checks `tasks` (init and the shell

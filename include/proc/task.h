@@ -139,6 +139,9 @@ void sched_preempt_check(void);
 // Make the boot thread task 0 of this core; it starts out holding the BKL.
 void task_init_boot(void);
 
+// On a secondary core: give it an idle task (pid 0) to be "current".
+void task_init_idle(void);
+
 // The big kernel lock (docs/locking.md). Taken on every kernel entry from EL0
 // and released on the way back (from src/arch/vectors.S), except while the task
 // is forbid()den; dropped while a task is switched out. The boot thread

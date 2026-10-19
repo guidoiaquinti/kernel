@@ -52,6 +52,24 @@ static task_t *volatile bkl_holder;  // diagnostics
 
 #define current (this_cpu()->curr)
 
+// Secondary cores' boot threads: what they run when they have no task (all
+// of the time until Milestone 7 PR 5 gives them run queues).
+static task_t idle_tasks[MAX_CPUS];
+
+void task_init_idle(void) {
+    struct cpu *c = this_cpu();
+    task_t *t = &idle_tasks[c->id];
+    t->pid = 0;
+    t->state = TASK_RUNNABLE;
+    t->name[0] = 'i';
+    t->name[1] = 'd';
+    t->name[2] = 'l';
+    t->name[3] = 'e';
+    t->name[4] = (char)('0' + c->id);
+    c->idle = t;
+    c->curr = t;
+}
+
 void task_init_boot(void) {
     struct cpu *c = this_cpu();
     c->idle = &boot_task;

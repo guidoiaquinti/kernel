@@ -41,10 +41,23 @@ writes its entry, so it needs no lock.
 - Kernel code is not preemptible: a task in the kernel runs until it returns
   to EL0 or blocks. Preemption happens only on the way back to EL0.
 
-BKL-protected, among others: the task table and parent links, fd tables, the
-filesystem and volume state, the screen (only tasks draw it), and the page
-tables (`mmu_map_coherent` only masks local IRQs and uses broadcast TLB
-maintenance).
+BKL-protected, among others: the process and task tables and parent links,
+fd tables, thread creation, exit and kill, the filesystem and volume state,
+the screen (only tasks draw it), and the page tables (`mmu_map_coherent` only
+masks local IRQs and uses broadcast TLB maintenance).
+
+### Killing threads without interrupting cores
+
+`exit()` and `kill()` end a whole process, but its other threads may be
+running on other cores at that moment. Under the BKL, the killer only marks
+them `killed` (and wakes those that are blocked, under `sched`); it never
+touches another core. Each thread checks its own flag on its own core: on
+kernel entry (`handle_sync_el0`, holding the BKL) and on every way back to EL0
+(`sched_preempt_check`, after a syscall, its tick, or being switched in), where
+it takes the BKL and exits. A woken thread's blocking loop (`read`, `wait`,
+`thread_join`; `msleep` simply returns) sees `task_killed()` and returns
+through the syscall normally, so it dies holding no lock and no buffer. A
+thread running only EL0 code dies on its core's next tick, within 10 ms.
 
 ### forbid() and permit()
 

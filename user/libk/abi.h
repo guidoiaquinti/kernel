@@ -4,7 +4,7 @@
  *
  * These MUST match the kernel side in include/sys/syscall.h.
  *
- * Calling convention: x8 = syscall number, x0..x2 = arguments, `svc #0`,
+ * Calling convention: x8 = syscall number, x0..x3 = arguments, `svc #0`,
  * return value in x0.
  */
 #pragma once
@@ -29,6 +29,10 @@
 #define SYS_FORBID      17
 #define SYS_PERMIT      18
 #define SYS_TASK_INFO   19
+#define SYS_THREAD_NEW  20
+#define SYS_THREAD_EXIT 21
+#define SYS_THREAD_JOIN 22
+#define SYS_KILL        23
 
 #define SYS_CHDIR 32
 #define SYS_GETCWD 33

@@ -30,8 +30,9 @@ void tty_flush(void);
 
 // Block until an input byte arrives from the keyboard or the UART (when routed
 // here). Must be called with IRQs masked (from a syscall); IRQs are opened only
-// while waiting.
-char tty_getc(void);
+// while waiting. Returns the byte (0..255), or -1 if the waiting task was
+// killed.
+int tty_getc(void);
 
 // Scroll the screen's history view by `halfpages` half screens (positive = back
 // in time), e.g. for Shift+PgUp/PgDn. Called from IRQ context by the keyboard

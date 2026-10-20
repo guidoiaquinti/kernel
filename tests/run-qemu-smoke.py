@@ -188,17 +188,21 @@ def near(actual, expected, tolerance=8):
 PROMPT = rb"^\$ "
 
 
-def ps_table(q):
-    """Run `ps` in the shell: [(pid, ppid, core, state, name)], prompt consumed."""
+def ps_table(q, tids=False):
+    """Run `ps` in the shell: [(pid, ppid, core, state, name)], one row per
+    thread, prompt consumed; with tids, [(pid, tid, ppid, core, state, name)]."""
     q.send("ps\r")
-    q.expect(rb"^\s+PID\s+PPID\s+CPU\s+STATE\s+NAME")
+    q.expect(rb"^\s+PID\s+TID\s+PPID\s+CPU\s+STATE\s+NAME")
     rows = []
     while True:
-        m = q.expect(rb"^\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w+)\s+(\S+)\r?\n|^\[\d+\] exited with 0")
+        m = q.expect(rb"^\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w+)\s+(\S+)\r?\n|"
+                     rb"^\[\d+\] exited with 0")
         if m.group(1) is None:
             break
-        rows.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4).decode(),
-                     m.group(5).decode()))
+        pid, tid, ppid, core = (int(g) for g in m.groups()[:4])
+        state, name = m.group(5).decode(), m.group(6).decode()
+        rows.append((pid, tid, ppid, core, state, name) if tids else
+                    (pid, ppid, core, state, name))
     q.expect(PROMPT)
     return rows
 
@@ -470,7 +474,7 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         return {name: info[:2] for name, info in listed.items()}, peak, size
 
     def read_tasks_bkl():
-        """`tasks` (pid, cpu, state, stack, name) with the forbid flag and the
+        """`tasks` (tid, pid, cpu, state, stack, name) with the forbid flag and the
         BKL holder: ({name: (state, stack, forbidden)}, peak, size, holder pid
         or None)."""
         q.send("\x14")
@@ -478,7 +482,7 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         q.send("tasks\r")
         listed = {}
         while True:
-            m = q.expect(rb"^(?:\s+(\d+)\s+(\d+)\s+(\w+)\s+(\d+)\s+(\S+)( \(forbid\))?|"
+            m = q.expect(rb"^(?:\s+(\d+)\s+\d+\s+(\d+)\s+(\w+)\s+(\d+)\s+(\S+)( \(forbid\))?(?: \(killed\))?|"
                          rb"kernel stack peak: (\d+) of (\d+) bytes)\r?\n")
             if m.group(7):
                 peak, size = int(m.group(7)), int(m.group(8))
@@ -675,19 +679,100 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
                           % (last - 1, last, apart))
     yield "ps, placement on the least-loaded core, @N pinning and parallel cores", placement_and_pinning
 
-    if repeat:
-        def kernel_counts():
-            q.send("\x14")
-            q.expect(rb"koraos> ")
-            q.send("heap\r")
-            m = q.expect(rb"^heap: (\d+) live")
-            live = int(m.group(1))
-            m = q.expect(rb"^pages: (\d+) of \d+ free")
-            q.expect(rb"koraos> ")
-            q.send("\x14")
-            q.expect(rb"\[serial -> screen terminal")
-            return live, int(m.group(1))
+    def kernel_counts():
+        """(live kernel heap allocations, free pages) from the debug console."""
+        q.send("\x14")
+        q.expect(rb"koraos> ")
+        q.send("heap\r")
+        m = q.expect(rb"^heap: (\d+) live")
+        live = int(m.group(1))
+        m = q.expect(rb"^pages: (\d+) of \d+ free")
+        q.expect(rb"koraos> ")
+        q.send("\x14")
+        q.expect(rb"\[serial -> screen terminal")
+        return live, int(m.group(1))
 
+    def probe(command, ok, code=0, timeout=60):
+        """Run a threadprobe mode in the foreground: its result line must match
+        `ok` (else its FAILED line is reported), then it exits with `code`."""
+        q.send("threadprobe %s\r" % command)
+        m = q.expect(rb"^threadprobe: (?:(" + ok + rb")|FAILED ([^\r\n]*))\r?\n", timeout=timeout)
+        if m.group(2) is not None:
+            raise Failure("threadprobe %s: %s" % (command, m.group(2).decode(errors="replace")))
+        m = q.expect(rb"\] exited with (-?\d+)", timeout=timeout)
+        if int(m.group(1)) != code:
+            raise Failure("threadprobe %s exited with %s, want %d" % (command, m.group(1).decode(), code))
+        q.expect(PROMPT)
+
+    def threads():
+        probe("join %d" % cores, rb"joined %d threads on %d cores, results ok" % (2 * cores, cores))
+        probe("jobs %d" % cores, rb"8 jobs on %d cores, results ok" % cores)
+        probe("malloc %d" % cores, rb"malloc from %d threads ok" % cores, timeout=120)
+    yield "threads on every core: create/join, libk jobs, one malloc heap", threads
+
+    def thread_lifetime():
+        def both():
+            # exit() from main ends threads that spin on every core or block
+            # in msleep, a console read and a join.
+            probe("exit %d" % cores, rb"exiting with 7", code=7)
+            # The program lives on until its last thread is done.
+            q.send("threadprobe last\r")
+            q.expect(rb"threadprobe: main thread exits")
+            q.expect(rb"threadprobe: last thread done")
+            m = q.expect(rb"\] exited with (-?\d+)")
+            if m.group(1) != b"0":
+                raise Failure("threadprobe last exited with %s, want 0" % m.group(1).decode())
+            q.expect(PROMPT)
+            left = [row for row in ps_table(q) if row[-1] == "threadprobe"]
+            if left:
+                raise Failure("threadprobe tasks outlived their program: %s" % left)
+        both()  # warms every cache
+        before = kernel_counts()
+        both()
+        after = kernel_counts()
+        if after != before:
+            raise Failure("kernel heap/pages (live, free) %s before, %s after the threaded "
+                          "programs ended" % (before, after))
+    yield "process lifetime: exit() kills every thread, the last thread ends it, nothing leaks", thread_lifetime
+
+    def kill_job():
+        q.send("kill 99999\r")
+        q.expect(rb"kill: no such program: 99999")
+        q.expect(PROMPT)
+        q.send("threadprobe hang %d &\r" % cores)
+        # The job's own line can come before or after the shell's.
+        pid = None
+        for _ in range(2):
+            m = q.expect(rb"^\[(\d+)\] started|threadprobe: hanging")
+            if m.group(1) is not None:
+                pid = int(m.group(1))
+        rows = [row for row in ps_table(q, tids=True) if row[-1] == "threadprobe"]
+        tids = {row[1] for row in rows}
+        if (len(rows) != cores + 1 or {row[0] for row in rows} != {pid} or len(tids) != len(rows)
+                or pid not in tids or not set(range(cores)) <= {row[3] for row in rows}):
+            raise Failure("ps shows threadprobe as %s, want %d threads of pid %d on cores 0..%d"
+                          % (rows, cores + 1, pid, cores - 1))
+        # Its threads die on their own cores within a tick or so, and a prompt
+        # then reports the job: maybe the one right after kill (on one core
+        # the woken threads run before the shell does), maybe a later one.
+        q.send("kill %d\r" % pid)
+        for _ in range(50):
+            m = q.expect(rb"^\[%d\] done, exit (-?\d+)|^\$ " % pid)
+            if m.group(1) is not None:
+                break
+            time.sleep(0.1)
+            q.send("\r")
+        else:
+            raise Failure("killed job %d never finished: %s" % (pid, ps_table(q, tids=True)))
+        if m.group(1) != b"-9":
+            raise Failure("killed job %d exited with %s, want -9" % (pid, m.group(1).decode()))
+        q.expect(PROMPT)
+        left = [row for row in ps_table(q) if row[-1] == "threadprobe"]
+        if left:
+            raise Failure("threadprobe tasks outlived kill: %s" % left)
+    yield "kill ends a multi-threaded background job on every core", kill_job
+
+    if repeat:
         def allocation_lifetime():
             baseline = None
             for run in range(repeat):

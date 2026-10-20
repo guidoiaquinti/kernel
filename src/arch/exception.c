@@ -5,6 +5,7 @@
 #include "common.h"
 #include "lib/panic.h"
 #include "lib/printf.h"
+#include "proc/task.h"
 #include "sys/syscall.h"
 
 extern char vectors[];
@@ -63,6 +64,7 @@ void handle_sync_el1(uint64_t esr, uint64_t far, struct trapframe *tf) {
 // Synchronous exception from EL0: a syscall, the first FP/SIMD use since the
 // task was switched in, or a user fault.
 void handle_sync_el0(uint64_t esr, uint64_t far, struct trapframe *tf) {
+    task_die_if_killed();  // its process exited or was killed meanwhile
     uint64_t ec = ESR_EC(esr);
     if (ec == ESR_EC_SVC64) {
         syscall_handle(tf);

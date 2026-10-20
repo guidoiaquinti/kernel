@@ -18,15 +18,16 @@ A program runs in EL0 with a deliberately small runtime:
   `-mgeneral-regs-only` (the libc port will lift this). The kernel does keep
   each task's FP/SIMD registers, so hand-written assembly can use them; see
   [`tests/user/fpregs.S`](../tests/user/fpregs.S).
-- **A ~4 KB stack.** Each task gets a single-page user stack, so keep large
-  buffers off the stack (use `malloc`, or static arrays).
+- **A ~4 KB stack.** A program's main thread gets a single-page user stack
+  (other threads get 16 KB), so keep large buffers off the stack (use `malloc`,
+  or static arrays).
 - **A heap that grows with the system's free memory.** `malloc`, `free`,
   `calloc` and `realloc` (16-byte aligned) come from
   [`user/libk/malloc.c`](../user/libk/malloc.c), a TLSF allocator over 64 KB
   pools of pages; blocks over 256 KB get page runs of their own. For whole
   pages, call `alloc_pages`/`free_pages` directly. Whatever you do not free is
   reclaimed when your program is reaped. `kheap_info()` reports the heap's
-  pools and usage.
+  pools and usage. The heap is shared by all your threads, behind one mutex.
 - **A flat identity map.** Pointers are physical addresses; e.g. `fb_info()`
   hands you the framebuffer address and you write pixels to it directly.
 - **Preemptive processes on every core.** Each program runs on one core for
@@ -37,8 +38,20 @@ A program runs in EL0 with a deliberately small runtime:
   `waitpid(-1, &code, WNOHANG)` collects finished children without blocking.
   `msleep(ms)` sleeps; `uptime_us()` reads a microsecond clock without a
   syscall. `forbid()`/`permit()` keep the CPU and the kernel to yourself while
-  you poke at kernel structures (see [locking.md](locking.md)). There are no
-  threads yet.
+  you poke at kernel structures (see [locking.md](locking.md)). `kill(pid)`
+  (the shell's `kill <pid>`) ends another program.
+- **Threads and jobs.** `thread_create(fn, arg, core)` runs `long fn(void
+  *arg)` in a new thread of your program, on `core` for life (`-1`: the
+  least-loaded core); everything but the stack and registers is shared.
+  `thread_join(tid, &result)` waits for it and collects `fn`'s return value
+  (or `thread_exit(value)`'s). Guard shared data with a `mutex_t`
+  (`mutex_lock`/`mutex_unlock`). On top, the TempleOS-style job API queues a
+  function to a core and collects the result later: `job_t *job =
+  job_queue(fn, arg, core)`, then `long r = job_result(job)`. `exit()` from any
+  thread (or returning from `main`) ends the whole program, all threads
+  included; if the main thread calls `thread_exit` instead, the program runs
+  on until its last thread ends. About 32 tasks exist system-wide, so join
+  threads before starting many more.
 - **`main` signature.** Either `int main(void)` or `int main(int argc, char
   **argv)`; the entry stub [`user/crt0.S`](../user/crt0.S) calls `main` and
   passes its return value to `exit`.

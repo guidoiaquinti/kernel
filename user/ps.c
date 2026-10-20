@@ -1,4 +1,6 @@
-/* ps: list the running tasks, with the core each one runs on. */
+/* ps: list the running tasks (every thread of every program), with the core
+ * each one runs on. TID is the thread; it equals PID for a program's main
+ * thread. */
 #include "libk/koraos.h"
 
 static void pad_int(long v, unsigned width) {
@@ -23,9 +25,10 @@ static void pad_int(long v, unsigned width) {
 int main(void) {
     static const char *const states[] = {"running ", "ready   ", "sleeping", "zombie  "};
     struct task_info info;
-    kputs("  PID  PPID  CPU  STATE     NAME\n");
+    kputs("  PID   TID  PPID  CPU  STATE     NAME\n");
     for (unsigned i = 0; task_info(i, &info) == 1; i++) {
         pad_int(info.pid, 5);
+        pad_int(info.tid, 6);
         pad_int(info.ppid, 6);
         pad_int((long)info.core, 5);
         kputs("  ");

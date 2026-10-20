@@ -20,7 +20,8 @@ function(koraos_add_userfs SOURCE_ROOT IMAGE_PATH)
     set(USER_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/user")
     file(MAKE_DIRECTORY "${USER_BUILD_DIR}")
     set(USER_RUNTIME_SOURCES "${USER_DIR}/crt0.S" "${USER_DIR}/libk/syscall.S"
-        "${USER_DIR}/libk/malloc.c" "${USER_DIR}/libk/mem.c")
+        "${USER_DIR}/libk/malloc.c" "${USER_DIR}/libk/mem.c" "${USER_DIR}/libk/mutex.c"
+        "${USER_DIR}/libk/job.c")
     file(GLOB_RECURSE USER_HEADERS CONFIGURE_DEPENDS "${USER_DIR}/*.h")
     # Manifest content changes on removals too, ensuring generated outputs are
     # rebuilt even when the remaining dependencies are older than those outputs.
@@ -47,6 +48,7 @@ function(koraos_add_userfs SOURCE_ROOT IMAGE_PATH)
         "${SOURCE_ROOT}/tests/user/fpregs.S")
     koraos_add_user_program(schedprobe "${SOURCE_ROOT}/tests/user/schedprobe.c")
     koraos_add_user_program(forbidprobe "${SOURCE_ROOT}/tests/user/forbidprobe.c")
+    koraos_add_user_program(threadprobe "${SOURCE_ROOT}/tests/user/threadprobe.c")
     koraos_add_user_program(nsprobe "${SOURCE_ROOT}/tests/user/nsprobe.c")
     koraos_add_user_program(writeprobe "${SOURCE_ROOT}/tests/user/writeprobe.c")
 

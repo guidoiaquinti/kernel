@@ -108,7 +108,7 @@ int assign(const char *name, const char *target);
  * not yours). Pages a program does not free are reclaimed when it is reaped.
  * malloc() and friends (user/libk/malloc.c) build a heap on top: 16-byte
  * aligned blocks from pools of pages, so the heap grows as long as the system
- * has free pages. */
+ * has free pages. Every thread of a program may use them at once. */
 #define KORAOS_PAGE_SIZE 4096
 
 #ifdef LIBK_HOST_TEST
@@ -147,8 +147,8 @@ void *memset(void *dest, int c, size_t n);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memmove(void *dest, const void *src, size_t n);
 
-/* Process control. Scheduling is preemptive: every runnable program gets
- * time slices of one 10 ms tick in turn.
+/* Process control. Scheduling is preemptive: every runnable thread gets time
+ * slices of one 10 ms tick in turn on its core.
  *
  * spawn_flags() starts a child; without SPAWN_NOWAIT it returns only once the
  * child has exited, with SPAWN_NOWAIT at once (a background job). Either way
@@ -164,10 +164,12 @@ void *memmove(void *dest, const void *src, size_t n);
 #define SPAWN_CORE(n) ((((n) + 1) & 0xf) << 8)
 #define WNOHANG 1
 
+/* exit() ends the whole program, from any of its threads (returning from main
+ * calls it): its other threads die too. */
 void exit(int status) __attribute__((noreturn));
 int spawn_flags(const char *name, int argc, char *const argv[], int flags);
 int waitpid(int pid, int *code, int flags);
-int getpid(void);
+int getpid(void);  /* the program's pid, the same in all its threads */
 void yield(void);
 void msleep(unsigned long ms);  /* at least ms milliseconds, in 10 ms ticks */
 
@@ -181,21 +183,70 @@ void msleep(unsigned long ms);  /* at least ms milliseconds, in 10 ms ticks */
 int forbid(void);
 int permit(void);
 
-/* One task, as task_info() reports it (the `ps` program). */
+/* kill() ends program `pid` from outside, as if it had called exit(-9): its
+ * threads die on their own cores, a blocked one as soon as it is woken for
+ * it. It must still be reaped by its parent. Returns 0, or -1 if there is no
+ * such running program. There are no signals: a program cannot catch it. */
+#define EXIT_KILLED (-9)
+int kill(int pid);
+
+/* One task (a thread of a program), as task_info() reports it (`ps`). */
 #define TASK_NAME_MAX 16
 enum { TASK_RUNNING = 0, TASK_READY, TASK_SLEEPING, TASK_ZOMBIE };
 struct task_info {
-    int pid;
+    int pid;                   /* its program */
     int ppid;                  /* 0: started by the kernel, or orphaned */
     unsigned core;             /* the core it runs on, for life */
-    unsigned state;            /* TASK_RUNNING .. TASK_ZOMBIE */
+    unsigned state;            /* TASK_RUNNING .. TASK_ZOMBIE (exited) */
     char name[TASK_NAME_MAX];
+    int tid;                   /* the thread; == pid for the main thread */
 };
 
 /* Fill *out with the index-th live task (0, 1, ...): 1 if there is one, 0
  * past the last, -1 on a bad pointer. Not a snapshot across calls: tasks may
  * come and go in between. */
 int task_info(unsigned index, struct task_info *out);
+
+/* Threads. A thread runs fn(arg) inside this program, sharing its memory, heap,
+ * open files and cwd, with a 16 KB stack and FP/SIMD registers of its own. It
+ * stays on `core` (0..3) for life; -1 picks the online core with the fewest
+ * tasks. thread_create() returns its id, or -1 (no such core, out of memory
+ * or task slots, or the program is exiting). Returning from fn, or calling
+ * thread_exit(), ends the thread; thread_join() waits for one, stores its
+ * result in *value (may be NULL), frees it and returns 0, or -1 for no such
+ * thread of this program (or one already joined). An unjoined thread is freed
+ * with its program. The program lives until its last thread ends (exit()
+ * ends them all), with exit code 0 if nobody called exit(). */
+typedef long (*thread_fn)(void *arg);
+int thread_new(void (*start)(void), thread_fn fn, void *arg, int core);  /* raw */
+void thread_exit(long value) __attribute__((noreturn));
+int thread_join(int tid, long *value);
+
+void libk_thread_start(void);  /* user/libk/syscall.S */
+
+static inline int thread_create(thread_fn fn, void *arg, int core) {
+    return thread_new(libk_thread_start, fn, arg, core);
+}
+
+/* A lock for data the threads of a program share (user/libk/mutex.c). The
+ * holder should keep it briefly: waiters spin, then yield() their core. */
+typedef struct {
+    volatile int locked;
+} mutex_t;
+#define MUTEX_INIT {0}
+void mutex_lock(mutex_t *m);
+int mutex_trylock(mutex_t *m);  /* 1 if it took the lock */
+void mutex_unlock(mutex_t *m);
+
+/* Jobs, after TempleOS (user/libk/job.c): queue a function to a core and
+ * collect its result later. job_queue() starts fn(arg) on `core` (-1: the
+ * least-loaded core) and returns at once, or returns NULL if it cannot (no
+ * such core, or out of task slots or memory: about 32 tasks exist system-wide,
+ * so collect results before queueing many more). job_result() waits for the
+ * job, frees it and returns fn's result. Every job must be collected once. */
+typedef struct job job_t;
+job_t *job_queue(thread_fn fn, void *arg, int core);
+long job_result(job_t *job);
 
 static inline int spawn(const char *name, int argc, char *const argv[]) {
     return spawn_flags(name, argc, argv, 0);

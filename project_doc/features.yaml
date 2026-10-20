@@ -140,9 +140,11 @@ categories:
         prs: [60]
       - id: threads
         name: Threads and jobs
-        status: planned
+        status: completed
         description: Threads sharing a process, plus a job API to queue work to a core.
         milestone: 7
+        completed: 2026-10-20
+        prs: [61]
 
   - id: userland
     name: Userland

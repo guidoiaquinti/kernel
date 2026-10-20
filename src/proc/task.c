@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Tasks, their kernel stacks, the scheduler and the big kernel lock. See
-// proc/task.h and docs/locking.md.
+// Processes, their threads (tasks) and kernel stacks, the scheduler and the
+// big kernel lock. See proc/task.h and docs/locking.md.
 //
 // Locking:
 //   * The BKL serializes everything tasks do in the kernel: a task holds it
-//     from kernel entry (from EL0) until it returns to EL0 or blocks. The task
-//     table, parent links, fd tables and so on are BKL-protected.
+//     from kernel entry (from EL0) until it returns to EL0 or blocks. The
+//     process and task tables, parent links, fd tables and so on are
+//     BKL-protected; so are thread creation, exit and kill, which is why a
+//     dying thread takes the BKL first.
 //   * sched_lock (IRQ-safe) protects task states and the scheduling fields
 //     (blocked_on, wait queues, wake_tick), because interrupt handlers, which
 //     never take the BKL, wake tasks and run the tick. It is held across the
@@ -36,11 +38,12 @@
 #define KSTACK_GUARD_WORDS 8               // must still hold the fill on a switch
 
 static task_t tasks[MAX_TASKS];
+static struct process procs[MAX_PROCS];
 static int next_pid = 1;
 static size_t kstack_peak_max;  // deepest kernel stack use of any reaped task
 
 // The boot thread: kernel_main runs as task 0 on the boot stack. It spawns
-// init and waits for it like any parent, but has no user side of its own.
+// init and waits for it like any parent, but has no process of its own.
 static task_t boot_task = {
     .pid = 0,
     .state = TASK_RUNNABLE,
@@ -159,21 +162,21 @@ int task_permit(void) {
     return --t->forbid;
 }
 
-// Grab a free table slot and give it a fresh pid. Returns NULL if the table is
-// full. Leaves the slot RUNNABLE; the caller fills in the rest.
 static void task_free(task_t *t);
+static void proc_free(struct process *p);
 static void wait_off_cpu(const task_t *t);
 
-// Free zombies nobody will reap: their parent exited before them.
+// Free finished processes nobody will reap: their parent exited before them.
 static void reap_orphans(void) {
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == TASK_EXITED && tasks[i].orphan && &tasks[i] != current) {
-            task_free(&tasks[i]);
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].pid != 0 && procs[i].zombie && procs[i].orphan) {
+            proc_free(&procs[i]);
         }
     }
 }
 
-// The slot stays UNUSED, so the scheduler ignores it, until task_create()
+// Grab a free table slot and give it a fresh id. Returns NULL if the table is
+// full. The slot stays UNUSED, so the scheduler ignores it, until its creator
 // has finished setting it up and makes it RUNNABLE.
 static task_t *task_alloc(void) {
     reap_orphans();
@@ -188,14 +191,36 @@ static task_t *task_alloc(void) {
     return NULL;
 }
 
+// A free process slot, zeroed, or NULL. It counts as free (pid 0) until its
+// main thread exists and gives it its id.
+static struct process *proc_alloc(void) {
+    reap_orphans();
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].pid == 0) {
+            memset(&procs[i], 0, sizeof(procs[i]));
+            return &procs[i];
+        }
+    }
+    return NULL;
+}
+
+static struct process *proc_find(int pid) {
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (pid > 0 && procs[i].pid == pid) {
+            return &procs[i];
+        }
+    }
+    return NULL;
+}
+
 static void set_state(task_t *t, task_state_t state) {
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     t->state = state;
     spin_unlock_irqrestore(&sched_lock, flags);
 }
 
-// Release a task's held memory and return its slot to the pool. Never called
-// on the running task: its kernel stack is in use.
+// Release a thread's stacks and FP/SIMD state and return its slot to the
+// pool. Never called on the running task: its kernel stack is in use.
 static void task_free(task_t *t) {
     wait_off_cpu(t);
     size_t peak = task_kstack_peak(t);
@@ -203,32 +228,40 @@ static void task_free(task_t *t) {
         kstack_peak_max = peak;
     }
     fpsimd_release(t);
-    fs_cwd_release(&t->cwd);
-    for (int f = 0; f < MAX_OPEN_FILES; f++) {
-        if (t->files[f].used) {
-            fat32_close(&t->files[f].file);
-            t->files[f].used = false;
-        }
-    }
-    if (t->image != NULL) {
-        frame_free_pages(t->image, t->image_pages);
-        t->image = NULL;
-    }
     if (t->stack != NULL) {
-        frame_free(t->stack);
+        frame_free_pages(t->stack, t->stack_pages);
         t->stack = NULL;
     }
     if (t->kstack != NULL) {
         frame_free_pages(t->kstack, KSTACK_PAGES);
         t->kstack = NULL;
     }
-    user_pages_release_all(t);
+    t->proc = NULL;
     set_state(t, TASK_UNUSED);
     t->pid = 0;
 }
 
-static task_t *parent_of(const task_t *t) {
-    return t->parent != NULL ? t->parent : &boot_task;
+// Release a process: whatever threads it still has (all exited, or never
+// started), its files, cwd and memory, and its slot.
+static void proc_free(struct process *p) {
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].pid != 0 && tasks[i].proc == p) {
+            task_free(&tasks[i]);
+        }
+    }
+    fs_cwd_release(&p->cwd);
+    for (int f = 0; f < MAX_OPEN_FILES; f++) {
+        if (p->files[f].used) {
+            fat32_close(&p->files[f].file);
+            p->files[f].used = false;
+        }
+    }
+    if (p->image != NULL) {
+        frame_free_pages(p->image, p->image_pages);
+        p->image = NULL;
+    }
+    user_pages_release_all(p);
+    p->pid = 0;
 }
 
 // Scheduling ---------------------------------------------------------------
@@ -371,13 +404,31 @@ static void make_runnable(task_t *t) {
     cpus[t->core].need_resched = true;  // its own core, maybe another one
 }
 
-// Block the running task until `child` (or, if NULL, any child) exits.
-static void block_on_child(task_t *child) {
+// Is `t` blocked for `why` on `what` (for BLOCK_CHILD, or on any child)?
+static bool blocked_for(const task_t *t, block_reason_t why, const void *what) {
+    return t->state == TASK_BLOCKED && t->blocked_on == why &&
+           (t->waiting_for == what || (why == BLOCK_CHILD && t->waiting_for == NULL));
+}
+
+// Block the running task until child process `child` (or, if NULL, any
+// child) finishes. Does not block a killed task.
+static void block_on_child(struct process *child) {
     uint64_t flags = spin_lock_irqsave(&sched_lock);
-    if (child == NULL || child->state != TASK_EXITED) {
+    if (!current->killed && (child == NULL || !child->zombie)) {
         current->state = TASK_BLOCKED;
         current->blocked_on = BLOCK_CHILD;
         current->waiting_for = child;
+    }
+    block_and_switch(flags);
+}
+
+// Block the running task until thread `t` exits. Does not block a killed task.
+static void block_on_join(task_t *t) {
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
+    if (!current->killed && t->state != TASK_EXITED) {
+        current->state = TASK_BLOCKED;
+        current->blocked_on = BLOCK_JOIN;
+        current->waiting_for = t;
     }
     block_and_switch(flags);
 }
@@ -387,8 +438,11 @@ void task_yield(void) {
 }
 
 void wait_queue_sleep(struct wait_queue *wq, struct spinlock *cond) {
-    spin_lock(&sched_lock);  // IRQs are already masked: the caller holds `cond`
     task_t *t = current;
+    if (t->killed) {
+        return;  // its caller gives up and lets it die
+    }
+    spin_lock(&sched_lock);  // IRQs are already masked: the caller holds `cond`
     t->state = TASK_BLOCKED;
     t->blocked_on = BLOCK_QUEUE;
     t->wq = wq;
@@ -424,10 +478,12 @@ void task_msleep(uint64_t ms) {
         return;
     }
     uint64_t flags = spin_lock_irqsave(&sched_lock);
-    current->state = TASK_BLOCKED;
-    current->blocked_on = BLOCK_SLEEP;
-    // The current tick is already partly over: one more guarantees the minimum.
-    current->wake_tick = systick_count() + ticks + 1;
+    if (!current->killed) {
+        current->state = TASK_BLOCKED;
+        current->blocked_on = BLOCK_SLEEP;
+        // The current tick is already partly over: one more guarantees the minimum.
+        current->wake_tick = systick_count() + ticks + 1;
+    }
     block_and_switch(flags);
 }
 
@@ -454,12 +510,20 @@ void sched_tick(uint64_t now) {
     spin_unlock(&sched_lock);
 }
 
+static void thread_die(long value) __attribute__((noreturn));
+
 void sched_preempt_check(void) {
     struct cpu *c = this_cpu();
     // A forbid()den task keeps its core, as on AmigaOS (until it blocks).
     if (c->need_resched && c->curr->forbid == 0) {
         c->need_resched = false;
         schedule();
+    }
+    // A killed thread dies here rather than return to EL0: after a syscall, a
+    // tick, or being switched back in (or in for the first time).
+    if (__atomic_load_n(&c->curr->killed, __ATOMIC_RELAXED)) {
+        bkl_enter_from_el0();  // thread exit is BKL-protected (a forbidden one holds it)
+        thread_die(0);
     }
 }
 
@@ -525,7 +589,7 @@ static bool build_args(void *stack, int argc, char *const argv[],
 // file is reported silently so the caller -- e.g. the shell -- can react).
 static int load_program(const char *name, struct loaded_prog *lp) {
     fs_cwd_t *initial = NULL;
-    const fs_cwd_t *cwd = task_current() != NULL ? &current->cwd : NULL;
+    const fs_cwd_t *cwd = proc_current() != NULL ? &proc_current()->cwd : NULL;
     if (cwd == NULL) {
         initial = kmalloc(sizeof(*initial));
         if (initial == NULL || fs_boot_cwd(initial) != 0) {
@@ -590,7 +654,57 @@ static int choose_core(int requested) {
     return sched_place(load, online, MAX_CPUS, requested);
 }
 
-task_t *task_create(const char *name, int argc, char *const argv[], int core) {
+// Fill a new thread's kernel stack, so its high-water mark can be measured,
+// then put its initial EL0 state at the top: the first switch to it "returns"
+// through ret_to_user and erets to `entry` on user stack `sp`, with x0/x1 =
+// a0/a1.
+static void thread_setup(task_t *t, uint64_t entry, uint64_t sp, uint64_t a0, uint64_t a1) {
+    uint64_t *words = t->kstack;
+    for (size_t i = 0; i < KSTACK_SIZE / sizeof(uint64_t); i++) {
+        words[i] = KSTACK_FILL;
+    }
+    t->tf = (struct trapframe *)((uint8_t *)t->kstack + KSTACK_SIZE - sizeof(struct trapframe));
+    memset(t->tf, 0, sizeof(*t->tf));
+    t->tf->elr = entry;
+    t->tf->sp = sp;
+    t->tf->spsr = 0;  // EL0t, interrupts unmasked
+    t->tf->regs[0] = a0;
+    t->tf->regs[1] = a1;
+    t->ctx.lr = (uint64_t)ret_to_user;
+    t->ctx.sp = (uint64_t)t->tf;
+}
+
+static void copy_name(char *dst, const char *src) {
+    size_t n = 0;
+    for (; src[n] != '\0' && n < TASK_NAME_MAX - 1; n++) {
+        dst[n] = src[n];
+    }
+    dst[n] = '\0';
+}
+
+// A new thread of `p` for `core`: a table slot, a kernel stack and
+// `stack_pages` of user stack, still UNUSED (not yet runnable). NULL if the
+// table or memory runs out; *full tells which.
+static task_t *thread_alloc(struct process *p, unsigned core, size_t stack_pages, bool *full) {
+    void *stack = frame_alloc_pages(stack_pages);
+    void *kstack = frame_alloc_pages(KSTACK_PAGES);
+    task_t *t = stack != NULL && kstack != NULL ? task_alloc() : NULL;
+    if (t == NULL) {
+        frame_free_pages(stack, stack_pages);
+        frame_free_pages(kstack, KSTACK_PAGES);
+        *full = stack != NULL && kstack != NULL;
+        return NULL;
+    }
+    t->proc = p;
+    t->core = core;
+    t->stack = stack;
+    t->stack_pages = stack_pages;
+    t->kstack = kstack;
+    copy_name(t->name, p->name);
+    return t;
+}
+
+struct process *task_create(const char *name, int argc, char *const argv[], int core) {
     core = choose_core(core);
     if (core < 0) {
         return NULL;  // a requested core that does not exist or is offline
@@ -599,82 +713,63 @@ task_t *task_create(const char *name, int argc, char *const argv[], int core) {
     if (load_program(name, &lp) != 0) {
         return NULL;
     }
-
-    void *stack = frame_alloc();
-    void *kstack = frame_alloc_pages(KSTACK_PAGES);
-    task_t *t = stack != NULL && kstack != NULL ? task_alloc() : NULL;
-    if (t == NULL) {
+    struct process *p = proc_alloc();
+    if (p == NULL) {
         frame_free_pages(lp.image, lp.image_pages);
-        frame_free(stack);
-        frame_free_pages(kstack, KSTACK_PAGES);
-        printf(stack != NULL && kstack != NULL ? "spawn: task table full\n"
-                                               : "spawn: out of memory for '%s' stacks\n",
-               name);
+        printf("spawn: process table full\n");
         return NULL;
     }
-    t->parent = task_current();
-    t->core = (unsigned)core;
-    t->image = lp.image;
-    t->image_pages = lp.image_pages;
-    t->stack = stack;
-    t->kstack = kstack;
-    size_t n = 0;
-    for (; name[n] != '\0' && n < TASK_NAME_MAX - 1; n++) {
-        t->name[n] = name[n];
-    }
-    t->name[n] = '\0';
+    p->image = lp.image;
+    p->image_pages = lp.image_pages;
+    p->parent = proc_current();
+    copy_name(p->name, name);
 
-    int cwd_rc = t->parent != NULL ? fs_cwd_copy(&t->cwd, &t->parent->cwd)
-                                   : fs_boot_cwd(&t->cwd);
+    bool full;
+    task_t *t = thread_alloc(p, (unsigned)core, 1, &full);
+    if (t == NULL) {
+        printf(full ? "spawn: task table full\n" : "spawn: out of memory for '%s' stacks\n", name);
+        proc_free(p);  // releases the image
+        return NULL;
+    }
+    p->pid = t->pid;
+    p->threads = 1;
+
+    int cwd_rc = p->parent != NULL ? fs_cwd_copy(&p->cwd, &p->parent->cwd)
+                                   : fs_boot_cwd(&p->cwd);
     if (cwd_rc != 0) {
-        task_free(t);
+        proc_free(p);
         return NULL;
     }
 
-    uint64_t sp = (uint64_t)stack + PAGE_SIZE;
+    uint64_t sp = (uint64_t)t->stack + PAGE_SIZE;
     uint64_t argv_child = 0;
     if (argc > MAX_ARGS) {
         argc = MAX_ARGS;
     }
     if (argc > 0) {
-        if (!build_args(stack, argc, argv, &sp, &argv_child)) {
+        if (!build_args(t->stack, argc, argv, &sp, &argv_child)) {
             printf("spawn: arguments too large for '%s'\n", name);
-            task_free(t);  // releases the image and stacks we just took
+            proc_free(p);  // releases the image and stacks we just took
             return NULL;
         }
     }
 
-    // Fill the kernel stack so its high-water mark can be measured, then put
-    // the initial EL0 state at its top: the first switch to the task "returns"
-    // through ret_to_user and erets to the entry point with x0/x1 = argc/argv.
-    uint64_t *words = kstack;
-    for (size_t i = 0; i < KSTACK_SIZE / sizeof(uint64_t); i++) {
-        words[i] = KSTACK_FILL;
-    }
-    t->tf = (struct trapframe *)((uint8_t *)kstack + KSTACK_SIZE - sizeof(struct trapframe));
-    memset(t->tf, 0, sizeof(*t->tf));
-    t->tf->elr = lp.entry;
-    t->tf->sp = sp;
-    t->tf->spsr = 0;  // EL0t, interrupts unmasked
-    t->tf->regs[0] = (uint64_t)argc;
-    t->tf->regs[1] = argv_child;
-    t->ctx.lr = (uint64_t)ret_to_user;
-    t->ctx.sp = (uint64_t)t->tf;
-
+    thread_setup(t, lp.entry, sp, (uint64_t)argc, argv_child);
     printf("  [pid %d] run '%s' on cpu %u: entry=0x%lx sp=0x%lx (%d image pages)\n",
-           t->pid, name, t->core, lp.entry, sp, (int)t->image_pages);
+           t->pid, name, t->core, lp.entry, sp, (int)p->image_pages);
     set_state(t, TASK_RUNNABLE);
-    return t;
+    return p;
 }
 
 int task_spawn(const char *name, int argc, char *const argv[], int flags) {
-    task_t *child = task_create(name, argc, argv, SPAWN_CORE_OF(flags));
+    struct process *child = task_create(name, argc, argv, SPAWN_CORE_OF(flags));
     if (child == NULL) {
         return -1;
     }
     int pid = child->pid;
     if ((flags & SPAWN_NOWAIT) == 0) {
-        while (child->state != TASK_EXITED) {
+        // Another thread of ours may reap the child meanwhile, freeing its slot.
+        while (child->pid == pid && !child->zombie && !task_killed()) {
             block_on_child(child);
         }
     }
@@ -682,34 +777,34 @@ int task_spawn(const char *name, int argc, char *const argv[], int flags) {
 }
 
 int task_wait_ex(int pid, int *code, int flags) {
-    task_t *me = task_current();
+    struct process *me = proc_current();
     for (;;) {
-        task_t *match = NULL;
-        bool exited = false;
-        for (int i = 0; i < MAX_TASKS; i++) {
-            task_t *t = &tasks[i];
-            if (t->state == TASK_UNUSED || t->parent != me || t->orphan ||
-                (pid != -1 && t->pid != pid)) {
+        struct process *match = NULL;
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct process *p = &procs[i];
+            if (p->pid == 0 || p->parent != me || p->orphan || (pid != -1 && p->pid != pid)) {
                 continue;
             }
-            if (match == NULL || (!exited && t->state == TASK_EXITED)) {
-                match = t;
-                exited = t->state == TASK_EXITED;
+            if (match == NULL || (!match->zombie && p->zombie)) {
+                match = p;
             }
         }
         if (match == NULL) {
             return -1;
         }
-        if (exited) {
+        if (match->zombie) {
             int found = match->pid;
             if (code != NULL) {
                 *code = match->exit_code;
             }
-            task_free(match);
+            proc_free(match);
             return found;
         }
         if (flags & WAIT_NOHANG) {
             return 0;
+        }
+        if (task_killed()) {
+            return -1;
         }
         block_on_child(pid == -1 ? NULL : match);
     }
@@ -721,7 +816,8 @@ int task_wait(int pid) {
 }
 
 int task_getpid(void) {
-    return current->pid;
+    struct process *p = current->proc;
+    return p != NULL ? p->pid : 0;
 }
 
 task_t *task_current(void) {
@@ -729,44 +825,196 @@ task_t *task_current(void) {
     return t != &boot_task && t != this_cpu()->idle ? t : NULL;
 }
 
+struct process *proc_current(void) {
+    return current->proc;
+}
+
 task_t *task_running(void) {
     return current;
 }
 
-void task_exit(int code) {
-    task_t *me = current;
-    me->forbid = 0;  // exiting ends a forbid(), as Permit() would
-    fpsimd_release(me);
+// Threads, exit and kill -------------------------------------------------
+//
+// All under the BKL. A thread that has to die elsewhere is only marked
+// killed: it notices on its own core, on its next kernel entry
+// (task_die_if_killed) or on its way back to EL0 (sched_preempt_check), so no
+// other core ever needs interrupting. A blocked one is woken for it, and its
+// blocking loop gives up (task_killed) and unwinds the syscall normally, so it
+// holds no lock or buffer when it dies.
 
-    // Children outlive us as orphans: reaped as soon as they are zombies.
-    // (Under the BKL: no other task changes parent links meanwhile.)
+// Mark every live thread of `p` killed (the caller's too, if it is one) and
+// wake those that are blocked.
+static void kill_threads(struct process *p) {
+    uint64_t flags = spin_lock_irqsave(&sched_lock);
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *t = &tasks[i];
-        if (t->state != TASK_UNUSED && t->parent == me) {
-            t->parent = NULL;
-            t->orphan = true;
-            if (t->state == TASK_EXITED) {
-                task_free(t);
+        if (t->proc != p || (t->state != TASK_RUNNABLE && t->state != TASK_BLOCKED)) {
+            continue;
+        }
+        __atomic_store_n(&t->killed, true, __ATOMIC_RELAXED);
+        if (t->state == TASK_BLOCKED) {
+            if (t->blocked_on == BLOCK_QUEUE) {
+                for (task_t **link = &t->wq->head; *link != NULL; link = &(*link)->wq_next) {
+                    if (*link == t) {
+                        *link = t->wq_next;
+                        break;
+                    }
+                }
+            }
+            make_runnable(t);
+        }
+    }
+    spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+// Under sched_lock: wake whoever waits for `p` to finish, the threads of its
+// parent process (or the boot task, for the kernel's children).
+static void wake_parent(struct process *p) {
+    if (p->orphan) {
+        return;
+    }
+    if (p->parent == NULL) {
+        if (blocked_for(&boot_task, BLOCK_CHILD, p)) {
+            make_runnable(&boot_task);
+        }
+        return;
+    }
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].proc == p->parent && blocked_for(&tasks[i], BLOCK_CHILD, p)) {
+            make_runnable(&tasks[i]);
+        }
+    }
+}
+
+// End the running thread for good. The last thread of a process makes it a
+// zombie: its children become orphans and its parent is woken.
+static void thread_die(long value) {
+    task_t *me = current;
+    struct process *p = me->proc;
+    me->forbid = 0;  // exiting ends a forbid(), as Permit() would
+    fpsimd_release(me);
+    me->exit_value = value;
+    bool last = --p->threads == 0;
+    if (last) {
+        // Children outlive us as orphans: reaped as soon as they are zombies.
+        for (int i = 0; i < MAX_PROCS; i++) {
+            struct process *child = &procs[i];
+            if (child->pid != 0 && child->parent == p) {
+                child->parent = NULL;
+                child->orphan = true;
+                if (child->zombie) {
+                    proc_free(child);
+                }
             }
         }
     }
 
     uint64_t flags = spin_lock_irqsave(&sched_lock);
     me->state = TASK_EXITED;
-    me->exit_code = code;
-    task_t *parent = parent_of(me);
-    if (!me->orphan && parent->state == TASK_BLOCKED && parent->blocked_on == BLOCK_CHILD &&
-        (parent->waiting_for == me || parent->waiting_for == NULL)) {
-        make_runnable(parent);
+    if (last) {
+        p->zombie = true;
+        wake_parent(p);
+    } else {
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (tasks[i].proc == p && blocked_for(&tasks[i], BLOCK_JOIN, me)) {
+                make_runnable(&tasks[i]);
+            }
+        }
     }
     block_and_switch(flags);  // never picks this task again
     panic("exited task %d was switched back in", me->pid);
 }
 
+// End process `p` with `code` (unless it is already ending): every live
+// thread is marked killed.
+static void proc_exit(struct process *p, int code) {
+    if (!p->exiting) {
+        p->exiting = true;
+        p->exit_code = code;
+    }
+    kill_threads(p);
+}
+
+void task_exit(int code) {
+    proc_exit(current->proc, code);
+    thread_die(0);
+}
+
+void task_thread_exit(long value) {
+    thread_die(value);
+}
+
+int task_thread_create(uint64_t entry, uint64_t a0, uint64_t a1, int core) {
+    struct process *p = proc_current();
+    if (p == NULL || p->exiting) {
+        return -1;
+    }
+    core = choose_core(core);
+    if (core < 0) {
+        return -1;
+    }
+    bool full;
+    task_t *t = thread_alloc(p, (unsigned)core, THREAD_STACK_PAGES, &full);
+    if (t == NULL) {
+        return -1;
+    }
+    p->threads++;
+    thread_setup(t, entry, (uint64_t)t->stack + THREAD_STACK_PAGES * PAGE_SIZE, a0, a1);
+    set_state(t, TASK_RUNNABLE);
+    return t->pid;
+}
+
+int task_thread_join(int tid, long *value) {
+    task_t *me = current;
+    for (;;) {
+        task_t *t = NULL;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (tid > 0 && tasks[i].pid == tid && tasks[i].state != TASK_UNUSED) {
+                t = &tasks[i];
+            }
+        }
+        if (t == NULL || t == me || me->proc == NULL || t->proc != me->proc) {
+            return -1;
+        }
+        if (t->state == TASK_EXITED) {
+            if (value != NULL) {
+                *value = t->exit_value;
+            }
+            task_free(t);
+            return 0;
+        }
+        if (task_killed()) {
+            return -1;
+        }
+        block_on_join(t);
+    }
+}
+
+int task_kill(int pid) {
+    struct process *p = proc_find(pid);
+    if (p == NULL || p->zombie) {
+        return -1;
+    }
+    proc_exit(p, EXIT_KILLED);
+    return 0;
+}
+
+bool task_killed(void) {
+    return __atomic_load_n(&current->killed, __ATOMIC_RELAXED);
+}
+
+void task_die_if_killed(void) {
+    if (task_killed()) {
+        thread_die(0);
+    }
+}
+
+// Free every finished process left unreaped (at the end of the kernel's
+// run). One still running keeps running.
 void task_reap_all(void) {
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state != TASK_UNUSED && &tasks[i] != current) {
-            task_free(&tasks[i]);
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].pid != 0 && procs[i].zombie) {
+            proc_free(&procs[i]);
         }
     }
 }
@@ -802,8 +1050,10 @@ int task_info_get(unsigned index, struct ktask_info *out) {
         if (t->state == TASK_UNUSED || index-- != 0) {
             continue;
         }
-        out->pid = t->pid;
-        out->ppid = t->parent != NULL ? t->parent->pid : 0;
+        struct process *p = t->proc;
+        out->pid = p != NULL ? p->pid : t->pid;
+        out->tid = t->pid;
+        out->ppid = p != NULL && p->parent != NULL ? p->parent->pid : 0;
         out->core = t->core;
         out->state = t->state == TASK_EXITED    ? 3
                      : t->state == TASK_BLOCKED ? 2

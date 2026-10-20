@@ -120,7 +120,7 @@ void tty_flush(void) {
     screen_flush();
 }
 
-char tty_getc(void) {
+int tty_getc(void) {
     tty_flush();  // whatever was echoed or printed must be visible while we wait
 
     // Sleep until a keyboard (USB, VirtIO) or UART interrupt pushes input.
@@ -143,10 +143,14 @@ char tty_getc(void) {
         if (input_pop(&c)) {
             break;
         }
+        if (task_killed()) {
+            spin_unlock_irqrestore(&input_lock, flags);
+            return -1;  // its process ended: give up so the task can die
+        }
         wait_queue_sleep(&input_waiters, &input_lock);
     }
     spin_unlock_irqrestore(&input_lock, flags);
-    return c;
+    return (unsigned char)c;
 }
 
 // Screen output with the Unix newline translation (ONLCR): the terminal treats

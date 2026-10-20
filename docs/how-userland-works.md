@@ -20,9 +20,11 @@ When something calls `spawn("ls", …)` (the shell) or the kernel starts
 3. **Load the ELF.** [`elf_load`](../src/user/elf.c) parses the buffer and lays
    the program out in memory (details below). The temporary buffer is freed
    immediately afterwards, `elf_load` has copied everything it needs out of it.
-4. **Set up the task.** A one-page user stack and a 16 KB kernel stack are
-   allocated, a task-table slot and pid are assigned, and `argv` is copied onto
-   the top of the user stack. The task's initial EL0 state (entry point,
+4. **Set up the process and its main thread.** A process slot takes the
+   image and a copy of the parent's cwd; a one-page user stack and a 16 KB
+   kernel stack are allocated, a task-table slot and pid are assigned, and
+   `argv` is copied onto the top of the user stack. The task's initial EL0
+   state (entry point,
    `SP_EL0` at the stack top, `x0`/`x1` = `argc`/`argv`) is written as a trap
    frame at the top of its kernel stack.
 5. **Enter EL0.** The parent blocks until the child exits, and the scheduler
@@ -32,8 +34,11 @@ When something calls `spawn("ls", …)` (the shell) or the kernel starts
    the entry point.
 
 The program runs until it returns from `main` (the entry stub then calls
-`exit`) or calls `exit` directly, which marks it exited, wakes its parent and
-switches away for good.
+`exit`) or calls `exit` directly, which ends its other threads too, marks it
+exited once the last one is gone, wakes its parent and switches away for good.
+`thread_create` makes further threads the same way, minus the loading: a
+16 KB user stack, a kernel stack, a task slot and a trap frame that enters
+libk's thread start with `fn` and `arg`.
 
 ## Where a binary is placed
 
@@ -55,21 +60,24 @@ they can load anywhere. `elf_load`:
   `bias + addend`), and
 - reports the absolute entry point `e_entry + bias`.
 
-So each spawned program gets its **own distinct region** in the pool. A task
-holds three kinds of memory, all from the same pool:
+So each spawned program gets its **own distinct region** in the pool. A
+program holds three kinds of memory, all from the same pool:
 
 | Region | Size | Notes |
 |--------|------|-------|
 | image  | a few pages | code + data + BSS, placed by `elf_load` |
-| stack  | 1 page (4 KB) | `SP_EL0` starts at the top; `argv` lives here |
-| page runs | any number | from `alloc_pages`, recorded per task; libk's `malloc` pools live here |
+| stacks | 1 page (4 KB) for the main thread, 4 pages (16 KB) per other thread | `SP_EL0` starts at the top; `argv` lives on the main stack |
+| page runs | any number | from `alloc_pages`, recorded per program; libk's `malloc` pools live here |
 
-When a task is reaped, all of them are returned to the pool, including page
+When a program is reaped, all of them are returned to the pool, including page
 runs the program never freed.
 
 ## Several programs at once
 
-Each task has its own kernel stack, with its EL0 registers saved in a trap
+A program is a **process** (`struct process` in
+[`include/proc/task.h`](../include/proc/task.h)): its image, page runs, cwd,
+open files, parent and exit code. It runs as one or more **threads**, each a
+task. Each task has its own kernel stack, with its EL0 registers saved in a trap
 frame at the top and its kernel context (callee-saved registers and stack
 pointer) saved by `cpu_switch` when it is switched out
 ([`src/proc/task.c`](../src/proc/task.c)). The boot thread, which runs
@@ -92,11 +100,17 @@ pointer) saved by `cpu_switch` when it is switched out
 - `spawn` is create plus wait: it creates the child and, unless asked for a
   background job (`SPAWN_NOWAIT`, the shell's `cmd &`), blocks the caller until
   the child has exited.
-- A finished task becomes a **zombie** (its memory stays allocated so its exit
-  code remains valid) until the parent reaps it with `wait`. If the parent
-  exits first, its children become orphans that the kernel reaps itself.
-- Up to `MAX_TASKS` (8) tasks can be live at once, including unreaped
-  zombies.
+- A program lives until its **last thread** ends. `exit()` from any thread,
+  or `kill`, marks the other threads killed; each dies on its own core, on its
+  next syscall or on its way back to EL0 (a blocked one is woken to give up
+  its call), so no core interrupts another.
+- A finished program becomes a **zombie** (its memory stays allocated so its
+  exit code remains valid) until the parent reaps it with `wait`. If the
+  parent exits first, its children become orphans that the kernel reaps
+  itself. An ended thread stays until another thread joins it, or until its
+  program is reaped.
+- Up to `MAX_TASKS` (32) tasks (threads) and `MAX_PROCS` (16) programs can be
+  live at once, including unreaped zombies.
 
 Because of the identity map, **every task's image, stack, and heap are mapped
 and addressable at the same time** (there is no address-space switch between

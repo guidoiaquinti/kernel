@@ -189,8 +189,17 @@ There is no page-table sharing to manage.
    serializes the kernel anyway. All device interrupts stay on core 0; idle
    cores pick up work on their tick. Exited tasks are reaped only once off
    their core's stack (`on_cpu`).
-6. **Threads and jobs**: `thread_create(fn, arg, core)`, thread exit and join,
-   process lifetime and kill semantics as above; the `libk` job API on top.
+6. **Threads and jobs** (done): processes split from threads (`struct
+   process`: image, page runs, cwd, fd table, parent, exit code; up to 16
+   processes and 32 tasks). `thread_create(fn, arg, core)` (syscall 20 with a
+   libk start stub), `thread_exit` (21), `thread_join` (22) and `kill(pid)`
+   (23, also a shell builtin). Process exit and kill mark the other threads
+   killed; each dies on its next kernel entry or return to EL0 on its own
+   core, and blocked ones are woken to give up their call, so no IPI is
+   needed. libk gets a `mutex_t`, a thread-safe `malloc`, and the TempleOS-
+   style job API (`job_queue`, `job_result`), one thread per job. `ps` shows
+   threads (TID). `threadprobe` smoke steps and a pthread-driven host test of
+   the mutex, heap and jobs.
 7. **Userland and CI**: atomics in `libk`; demos for a job-parallel computation
    showing the speedup and for a program driving several unbalanced, pinned
    sub-processes; CI profiles on `virt -smp 4` and raspi3b (four cores),

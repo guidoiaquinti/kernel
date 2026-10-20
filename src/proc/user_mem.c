@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Per-task user page runs. See proc/user_mem.h.
+// Per-process user page runs. See proc/user_mem.h.
 
 #include "proc/user_mem.h"
 
@@ -8,7 +8,7 @@
 #include "mm/kmalloc.h"
 #include "proc/task.h"
 
-void *user_pages_alloc(task_t *t, size_t pages) {
+void *user_pages_alloc(struct process *p, size_t pages) {
     if (pages == 0) {
         return NULL;
     }
@@ -23,13 +23,13 @@ void *user_pages_alloc(task_t *t, size_t pages) {
     }
     run->base = base;
     run->pages = pages;
-    run->next = t->runs;
-    t->runs = run;
+    run->next = p->runs;
+    p->runs = run;
     return base;
 }
 
-int user_pages_free(task_t *t, void *base) {
-    for (struct user_run **link = &t->runs; *link != NULL; link = &(*link)->next) {
+int user_pages_free(struct process *p, void *base) {
+    for (struct user_run **link = &p->runs; *link != NULL; link = &(*link)->next) {
         struct user_run *run = *link;
         if (run->base == base) {
             *link = run->next;
@@ -41,19 +41,19 @@ int user_pages_free(task_t *t, void *base) {
     return -1;
 }
 
-void user_pages_release_all(task_t *t) {
-    while (t->runs != NULL) {
-        struct user_run *run = t->runs;
-        t->runs = run->next;
+void user_pages_release_all(struct process *p) {
+    while (p->runs != NULL) {
+        struct user_run *run = p->runs;
+        p->runs = run->next;
         frame_free_pages(run->base, run->pages);
         kfree(run);
     }
 }
 
-size_t user_pages_count(const task_t *t, size_t *runs) {
+size_t user_pages_count(const struct process *p, size_t *runs) {
     size_t pages = 0;
     size_t n = 0;
-    for (const struct user_run *run = t->runs; run != NULL; run = run->next) {
+    for (const struct user_run *run = p->runs; run != NULL; run = run->next) {
         pages += run->pages;
         n++;
     }

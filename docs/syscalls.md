@@ -5,7 +5,7 @@ their POSIX namesakes to ease a future libc shim, but the numbering is our own.
 
 ## Calling convention
 
-`x8` holds the syscall number; arguments go in `x0`, `x1`, `x2` (AAPCS order);
+`x8` holds the syscall number; arguments go in `x0` to `x3` (AAPCS order);
 `svc #0` traps into the kernel; the return value comes back in `x0`.
 
 The numbers are defined in two places that **must stay in sync**:
@@ -20,12 +20,12 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 | # | Name | Prototype | Returns |
 |---|------|-----------|---------|
 | 0 | `write` | `ssize_t write(int fd, const void *buf, size_t len)` | bytes written, or `-1` |
-| 1 | `exit` | `void exit(int status)` | does not return |
+| 1 | `exit` | `void exit(int status)` | does not return (ends every thread) |
 | 2 | `read` | `ssize_t read(int fd, void *buf, size_t len)` | bytes read, `0` at EOF, or `-1` |
 | 3 | (retired) | was `sbrk` | `-1` |
 | 4 | `spawn` | `int spawn_flags(const char *name, int argc, char *const argv[], int flags)` | child pid, or `-1` |
 | 5 | `wait` | `int waitpid(int pid, int *code, int flags)` | child pid, `0` (`WNOHANG`, none yet), or `-1` |
-| 6 | `getpid` | `int getpid(void)` | current pid |
+| 6 | `getpid` | `int getpid(void)` | the program's pid (the same in every thread) |
 | 7 | `yield` | `void yield(void)` | `0`, after letting other runnable tasks run |
 | 8 | `fb_info` | `int fb_info(struct fb_info *out)` | `0`, or `-1` |
 | 9 | `open` | `int open(const char *path, int flags)` | fd (≥ 3), or `-1` |
@@ -39,6 +39,10 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 | 17 | `forbid` | `int forbid(void)` | new forbid depth |
 | 18 | `permit` | `int permit(void)` | new forbid depth, or `-1` if not forbidden |
 | 19 | `task_info` | `int task_info(unsigned index, struct task_info *out)` | `1` entry, `0` past the last, `-1` bad pointer |
+| 20 | `thread_new` | `int thread_new(void (*start)(void), thread_fn fn, void *arg, int core)` | thread id, or `-1` (use libk's `thread_create`) |
+| 21 | `thread_exit` | `void thread_exit(long value)` | does not return |
+| 22 | `thread_join` | `int thread_join(int tid, long *value)` | `0`, or `-1` |
+| 23 | `kill` | `int kill(int pid)` | `0`, or `-1` if there is no such running program |
 | 32 | `chdir` | `int chdir(const char *path)` | `0`, or `-1` |
 | 33 | `getcwd` | `int getcwd(char *buf, size_t size)` | `0`, or `-1` |
 | 34 | `volume_info` | `int volume_info(unsigned int index, struct volume_info *out)` | `1` item, `0` end, `-1` error |
@@ -60,14 +64,19 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
   returns at newline or when the buffer fills). `fd ≥ 3` reads from an open file.
 - **`alloc_pages`** / **`free_pages`**: Amiga-style memory: a run of `count`
   contiguous, zeroed 4 KB pages (`KORAOS_PAGE_SIZE`) anywhere in RAM, returned
-  by its base address. The kernel records each run against the calling task, so
-  `free_pages` needs no size, rejects addresses the task does not own, and
-  everything still allocated is reclaimed when the task is reaped. libk's
+  by its base address. The kernel records each run against the calling
+  program (any of its threads may free it), so `free_pages` needs no size,
+  rejects addresses the program does not own, and everything still allocated
+  is reclaimed when the program is reaped. libk's
   `malloc` builds on these (see
   [writing-userland-programs.md](writing-userland-programs.md)). There is no
   `sbrk`: with one flat address space, memory after a heap is usually someone
   else's, so a contiguous break cannot grow reliably.
-- **`spawn`**: creates a task for the program. Without `SPAWN_NOWAIT` (flags
+- **`exit`**: ends the whole program, whichever thread calls it (returning
+  from `main` calls it). Its other threads are marked killed and die on their
+  own cores (see `kill`); the program is finished, and can be reaped, once the
+  last of them is gone.
+- **`spawn`**: creates a process for the program, with one (main) thread. Without `SPAWN_NOWAIT` (flags
   0) it blocks the caller until the child has exited, then returns the child's
   pid; with `SPAWN_NOWAIT` it returns the pid at once and the child runs
   alongside (a background job). Either way, reap the child with `waitpid`.
@@ -83,13 +92,38 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 - **`wait`**: reaps an exited child, `pid` or any child for `-1`, storing its
   exit code in `*code` (which may be `NULL`) and returning its pid. It blocks
   until one exits, unless `WNOHANG` is set, in which case it returns `0` if
-  none has. `-1` means the caller has no such child. libk's `wait(pid)`
+  none has. `-1` means the caller has no such child. Children belong to the
+  program, so any of its threads may reap them. libk's `wait(pid)`
   returns the exit code directly. A child whose parent exits first becomes an
   orphan and is reaped by the kernel.
-- **`task_info`**: the `index`-th live task (0, 1, ...): pid, parent pid (0
-  for the kernel or an orphan), core, state (`TASK_RUNNING`, `TASK_READY`,
-  `TASK_SLEEPING`, `TASK_ZOMBIE`) and name. Each call is consistent; tasks may
-  come and go between calls. `/bin/ps` prints the list.
+- **`task_info`**: the `index`-th live task, one per thread (0, 1, ...): the
+  program's pid, its parent pid (0 for the kernel or an orphan), core, state
+  (`TASK_RUNNING`, `TASK_READY`, `TASK_SLEEPING`, `TASK_ZOMBIE` for an exited
+  thread), name, and the thread id (`tid`, equal to `pid` for the main
+  thread). Each call is consistent; tasks may come and go between calls.
+  `/bin/ps` prints the list.
+- **`thread_new`**: starts a thread of the calling program at `start` (in
+  EL0) with `x0 = fn` and `x1 = arg`, on a fresh 16 KB stack, on `core` for life
+  (`-1`: the online core with the fewest tasks). It shares everything else with
+  the program: memory, heap, open files, cwd. libk's `thread_create(fn, arg,
+  core)` passes its own `start`, which calls `fn(arg)` and hands the result to
+  `thread_exit`. Fails for a missing or offline core, when the task table
+  (32 tasks system-wide) or memory runs out, or while the program is exiting.
+- **`thread_exit`**: ends the calling thread with `value` for `thread_join`.
+  The last thread to end finishes the program, with exit code 0 unless `exit`
+  or `kill` set one.
+- **`thread_join`**: waits until thread `tid` of the calling program has
+  ended, stores its value in `*value` (which may be `NULL`) and frees it. Each
+  thread can be joined once; `-1` for an unknown thread, one of another
+  program, the caller itself, or one already joined. Unjoined threads are
+  freed with their program.
+- **`kill`**: ends program `pid` as if it had called `exit(EXIT_KILLED)`
+  (`-9`). Nothing interrupts another core: each thread notices on its own
+  core, on its next syscall or on its way back to EL0 after its tick, and a
+  thread blocked in `read`, `msleep`, `wait` or `thread_join` is woken to give
+  up its call. A forbidden thread keeps the BKL, so `kill` waits until it
+  permits. There are no signals: the program cannot catch it. Its parent
+  still reaps it. The shell's `kill <pid>` uses it.
 - **`msleep`**: blocks for at least `ms` milliseconds, in whole 10 ms ticks
   (plus up to one tick); other tasks run meanwhile. `msleep(0)` yields.
 - **`forbid`** / **`permit`**: after AmigaOS's `Forbid()`/`Permit()`. `forbid`
@@ -109,7 +143,7 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 - **`readdir`**: returns one entry per call from a directory fd. Skips deleted
   entries, the volume label, and `.` / `..`. `name` is UTF-8.
 - **`stat`**: reports size and whether the path is a directory.
-- **`chdir`**: changes only the calling task's current directory. Supports
+- **`chdir`**: changes only the calling program's current directory. Supports
   device/volume prefixes, current-volume absolute paths, relative paths, `.` and
   `..`. The target must be a directory; failure preserves cwd. Children inherit
   cwd at spawn and can change it independently.

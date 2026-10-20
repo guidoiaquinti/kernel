@@ -113,6 +113,7 @@ static void help(void) {
     kputs("  <program> [args...] &  run it in the background\n");
     kputs("  <program> [args...] @N  run it on core N (with & too: ... @N &)\n");
     kputs("  ps              list tasks and the core each runs on\n");
+    kputs("  kill <pid>      end a program (a background job)\n");
     kputs("programs in /bin: hello, echo, gfxdemo, termdemo, ls, cat (try 'ls /bin')\n");
 }
 
@@ -170,6 +171,23 @@ static void assign_command(int argc, char **argv) {
     }
     if (rc < 0) {
         kputs("assign: enumeration failed\n");
+    }
+}
+
+// kill <pid>: end a program. Its exit (EXIT_KILLED) is reported as a job's at
+// the next prompt, once its threads are gone.
+static void kill_command(int argc, char **argv) {
+    int pid = 0;
+    const char *p = argc == 2 ? argv[1] : "";
+    for (; *p >= '0' && *p <= '9' && pid < 100000000; p++) {
+        pid = pid * 10 + (*p - '0');
+    }
+    if (argc != 2 || *p != '\0' || pid <= 0) {
+        kputs("usage: kill <pid>\n");
+    } else if (kill(pid) < 0) {
+        kputs("kill: no such program: ");
+        kputs(argv[1]);
+        kputs("\n");
     }
 }
 
@@ -305,6 +323,10 @@ int main(void) {
         }
         if (kstreq(argv[0], "assign")) {
             assign_command(argc, argv);
+            continue;
+        }
+        if (kstreq(argv[0], "kill")) {
+            kill_command(argc, argv);
             continue;
         }
         size_t command_len = kstrlen(argv[0]);

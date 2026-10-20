@@ -73,6 +73,9 @@ int free_pages(void *base) {
     return -1;
 }
 
+// The heap's mutex never waits here (one thread), but mutex.c links yield().
+void yield(void) {}
+
 // Helpers --------------------------------------------------------------
 
 static struct kheap_info info(void) {

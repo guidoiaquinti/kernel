@@ -40,13 +40,12 @@ static void systick_isr(void *ctx) {
     // interrupt latency (re-arming a relative TVAL would lose each overshoot).
     c->tick_deadline += g_interval;
     write_cntp_cval(c->tick_deadline);
-    if (c->id != 0) {
-        return;  // secondary cores have no work yet (Milestone 7 PR 5)
+    if (c->id == 0) {
+        g_ticks++;
     }
-    g_ticks++;
-    sched_tick(g_ticks);
-    if (g_tick_hook != NULL) {
-        g_tick_hook();
+    sched_tick(g_ticks);  // every core schedules its own tasks
+    if (c->id == 0 && g_tick_hook != NULL) {
+        g_tick_hook();  // Circle's timers: core 0 only
     }
 }
 

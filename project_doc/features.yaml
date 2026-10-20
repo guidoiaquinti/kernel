@@ -126,14 +126,18 @@ categories:
         prs: [51, 52]
       - id: smp
         name: Multicore (SMP)
-        status: in_progress
+        status: completed
         description: User programs run in parallel on all cores under one big kernel lock.
         milestone: 7
+        completed: 2026-10-19
+        prs: [57, 58, 59, 60]
       - id: core-pinning
         name: Core placement and pinning
-        status: planned
+        status: completed
         description: Per-core run queues; tasks can be started on a chosen core.
         milestone: 7
+        completed: 2026-10-19
+        prs: [60]
       - id: threads
         name: Threads and jobs
         status: planned
@@ -205,9 +209,11 @@ categories:
         prs: [47, 49]
       - id: job-control
         name: Background jobs and pinning
-        status: in_progress
+        status: completed
         description: Run programs in the background or on a chosen core.
         milestone: 7
+        completed: 2026-10-19
+        prs: [52, 60]
       - id: basic
         name: BASIC
         status: wish

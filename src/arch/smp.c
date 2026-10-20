@@ -47,10 +47,7 @@ void secondary_main(unsigned id) {
     systick_init_this_core();
 
     __atomic_store_n(&this_cpu()->online, true, __ATOMIC_RELEASE);
-    irq_enable();
-    for (;;) {
-        asm volatile("wfi");
-    }
+    task_idle_forever();  // run this core's tasks from now on
 }
 
 #ifdef KORAOS_VIRT

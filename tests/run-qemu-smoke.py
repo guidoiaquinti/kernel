@@ -188,6 +188,28 @@ def near(actual, expected, tolerance=8):
 PROMPT = rb"^\$ "
 
 
+def ps_table(q):
+    """Run `ps` in the shell: [(pid, ppid, core, state, name)], prompt consumed."""
+    q.send("ps\r")
+    q.expect(rb"^\s+PID\s+PPID\s+CPU\s+STATE\s+NAME")
+    rows = []
+    while True:
+        m = q.expect(rb"^\s+(\d+)\s+(\d+)\s+(\d+)\s+(\w+)\s+(\S+)\r?\n|^\[\d+\] exited with 0")
+        if m.group(1) is None:
+            break
+        rows.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4).decode(),
+                     m.group(5).decode()))
+    q.expect(PROMPT)
+    return rows
+
+
+def core_of(q, name):
+    for _, _, core, _, task in ps_table(q):
+        if task == name:
+            return core
+    raise Failure("ps does not list %s" % name)
+
+
 def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1):
     """Yield (name, check) steps; each check raises Failure on error."""
 
@@ -448,18 +470,20 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         return {name: info[:2] for name, info in listed.items()}, peak, size
 
     def read_tasks_bkl():
-        """`tasks` with the forbid flag and BKL holder: ({name: (state, stack,
-        forbidden)}, peak, size, holder pid or None)."""
+        """`tasks` (pid, cpu, state, stack, name) with the forbid flag and the
+        BKL holder: ({name: (state, stack, forbidden)}, peak, size, holder pid
+        or None)."""
         q.send("\x14")
         q.expect(rb"koraos> ")
         q.send("tasks\r")
         listed = {}
         while True:
-            m = q.expect(rb"^(?:\s+(\d+)\s+(\w+)\s+(\d+)\s+(\S+)( \(forbid\))?|kernel stack peak: (\d+) of (\d+) bytes)\r?\n")
-            if m.group(6):
-                peak, size = int(m.group(6)), int(m.group(7))
+            m = q.expect(rb"^(?:\s+(\d+)\s+(\d+)\s+(\w+)\s+(\d+)\s+(\S+)( \(forbid\))?|"
+                         rb"kernel stack peak: (\d+) of (\d+) bytes)\r?\n")
+            if m.group(7):
+                peak, size = int(m.group(7)), int(m.group(8))
                 break
-            listed[m.group(4).decode()] = (m.group(2).decode(), int(m.group(3)), m.group(5) is not None)
+            listed[m.group(5).decode()] = (m.group(3).decode(), int(m.group(4)), m.group(6) is not None)
         m = q.expect(rb"^big kernel lock: (free|pid (\d+))\r?\n")
         holder = int(m.group(2)) if m.group(2) else None
         q.expect(rb"koraos> ")
@@ -494,9 +518,10 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         q.expect(rb"exited with 0")
         q.expect(PROMPT)
 
-        # A background job that never makes a syscall: the shell only answers
-        # while it runs if the timer tick preempts it.
-        q.send("schedprobe spin 5000 &\r")
+        # A background job that never makes a syscall, on the shell's own core:
+        # the shell only answers while it runs if the timer tick preempts it.
+        shell_core = core_of(q, "shell")
+        q.send("schedprobe spin 5000 @%d &\r" % shell_core)
         m = q.expect(rb"^\[(\d+)\] started")
         pid = m.group(1)
         q.expect(PROMPT)
@@ -531,13 +556,15 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         # With a spinner competing, a normal task loses the CPU for whole time
         # slices (10 ms); while forbid()den it must not lose it at all. Host
         # scheduling noise can stretch a gap, so allow a few attempts.
-        q.send("schedprobe spin 8000 &\r")
+        # Both on the shell's core, so they compete for it.
+        core = core_of(q, "shell")
+        q.send("schedprobe spin 8000 @%d &\r" % core)
         m = q.expect(rb"^\[(\d+)\] started")
         spinner = m.group(1)
         q.expect(PROMPT)
         results = []
         for _ in range(3):
-            q.send("forbidprobe\r")
+            q.send("forbidprobe @%d\r" % core)
             m = q.expect(rb"^forbidprobe: (?:longest gap free (\d+) us, forbidden (\d+) us|([^\r\n]*))\r?\n",
                          timeout=60)
             if m.group(3) is not None:
@@ -568,10 +595,85 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
             if m.group(1) is not None and m.group(1) != spinner:
                 break
             time.sleep(0.1)
-        _, _, _, holder = read_tasks_bkl()
-        if holder is not None:
+        # Nobody keeps the BKL once the system is idle. (The shell, on its own
+        # core, may be caught in a syscall: look again.)
+        for _ in range(10):
+            _, _, _, holder = read_tasks_bkl()
+            if holder is None:
+                break
+            time.sleep(0.2)
+        else:
             raise Failure("the BKL is still held (by pid %s) with the system idle" % holder)
     yield "forbid()/permit(): nesting, no preemption, BKL held across EL0", forbid_permit
+
+    def reap(count):
+        """Wait until the shell has reaped every finished schedprobe job (each
+        prompt reports and reaps finished jobs; `ps` shows any left, zombies
+        included). `count` is only for the error message."""
+        for _ in range(100):
+            if not any(name == "schedprobe" for *_, name in ps_table(q)):
+                return
+            time.sleep(0.1)
+        raise Failure("%d background jobs were never reaped: %s" % (count, ps_table(q)))
+
+    def spin_gaps(placements, ms=1500):
+        """Run one spinner per @core (None: unpinned), wait, return their
+        longest gaps in us."""
+        for core in placements:
+            q.send("schedprobe spin %d%s &\r" % (ms, "" if core is None else " @%d" % core))
+            q.expect(rb"^\[\d+\] started")
+            q.expect(PROMPT)
+        gaps = [int(q.expect(rb"schedprobe: spun \d+ ms, longest gap (\d+) us", timeout=60).group(1))
+                for _ in placements]
+        reap(len(placements))
+        return gaps
+
+    def placement_and_pinning():
+        rows = ps_table(q)
+        names = {name: core for _, _, core, _, name in rows}
+        if not {"init", "shell", "ps"} <= set(names):
+            raise Failure("ps lists %s" % rows)
+        if any(core >= cores for core in names.values()):
+            raise Failure("ps shows a core outside 0..%d: %s" % (cores - 1, rows))
+        if cores == 1:
+            q.send("echo hi @1\r")
+            q.expect(rb"shell: cannot run echo on cpu 1")
+            q.expect(PROMPT)
+            return
+        # Pinned: the task runs where it was put.
+        last = cores - 1
+        q.send("schedprobe spin 2000 @%d &\r" % last)
+        q.expect(rb"^\[\d+\] started")
+        q.expect(PROMPT)
+        if core_of(q, "schedprobe") != last:
+            raise Failure("schedprobe @%d runs elsewhere: %s" % (last, ps_table(q)))
+        q.expect(rb"schedprobe: spun \d+ ms", timeout=60)
+        reap(1)
+        # Unpinned: two jobs go to different (least-loaded) cores.
+        for _ in range(2):
+            q.send("schedprobe spin 2000 &\r")
+            q.expect(rb"^\[\d+\] started")
+            q.expect(PROMPT)
+        spinners = [core for _, _, core, _, name in ps_table(q) if name == "schedprobe"]
+        if len(spinners) != 2 or spinners[0] == spinners[1]:
+            raise Failure("two unpinned jobs landed on cores %s" % spinners)
+        for _ in spinners:
+            q.expect(rb"schedprobe: spun \d+ ms", timeout=60)
+        reap(2)
+        # Sharing a core, two spinners lose whole slices to each other; on
+        # separate cores they run side by side. (Host scheduling noise can
+        # stretch a gap on a separate core, hence a few attempts.)
+        shared = spin_gaps([last, last])
+        if min(shared) < 5000:
+            raise Failure("two spinners on one core did not time-slice: gaps %s us" % shared)
+        for _ in range(3):
+            apart = spin_gaps([last - 1, last])
+            if max(apart) < 5000:
+                break
+        else:
+            raise Failure("spinners on cores %d and %d still lost slices: gaps %s us"
+                          % (last - 1, last, apart))
+    yield "ps, placement on the least-loaded core, @N pinning and parallel cores", placement_and_pinning
 
     if repeat:
         def kernel_counts():

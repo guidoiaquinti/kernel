@@ -40,6 +40,7 @@ Current suites:
 | `shell_input_test.c` | Real EL0 shell parser with renamed syscall stubs: fragmented reads, maximal complete lines, oversized-line draining, next-command preservation, 16/17-token boundary, terminated arguments, maximal assign target, quoted/escaped/empty tokens, literal operator provenance and malformed quoting |
 | `filesystem_test.c` | `src/fs/fat32.c` and `src/fs/namespace.c` on mtools-made volumes: independent geometry/caches, root/BPB labels, duplicate labels/device collisions, relative paths, cwd isolation, retained handles, malformed geometry/chains/LFN, allocation and I/O errors, assign snapshots/replacement/removal/capacity, c-only command lookup and shadowed-label cwd, owned cwd/assign ancestor pins, busy reset and flush-failed reset preservation/retry |
 | `blkdev_test.c` | `src/fs/blkdev.c`: bare FAT32 and mixed MBR discovery, hidden FAT32 types, invalid/range/overlap tables, partition-relative bounded read/write/flush, read-only and unsupported I/O, registry capacity |
+| `placement_test.c` | `src/proc/placement.c`: least-loaded core with ties to the lowest, offline cores skipped, even spreading, pinned requests honoured or refused (offline or nonexistent core) |
 | `spinlock_test.c` | `src/arch/spinlock.c`: one thread per simulated core; lock/trylock/irqsave bookkeeping, panics on recursive locking and foreign unlock (in forked children), and a contended counter with no lost updates or overlapping critical sections. Runs twice: on arm64 hosts the real `LDAXR`/`STXR` code, and the compiler-atomic fallback (`SPINLOCK_PORTABLE`) |
 | `kmalloc_test.c` | `src/mm/kmalloc.c`, `src/mm/kmalloc_stress.c`: alignment, zeroing, cache-line separation, block reuse, slab release, page runs, over-aligned blocks, exhaustion, invalid and double frees, balanced IRQ masking, seeded stress |
 | `term_test.c` | `src/video/term.c`: autowrap, scrollback and its view, scroll regions, insert/delete/erase, alternate screen, status replies, colours (16/256/24-bit, bce), UTF-8 and DEC line drawing, tabs, origin mode, cursor style/visibility, OSC, REP |
@@ -170,7 +171,11 @@ syscalls must not stop the shell from running `echo`, so the tick preempts it;
 the job is reported as done at a later prompt), runs `forbidprobe` (`forbid()`
 nests and survives `msleep`; with a spinner competing, the task loses the CPU
 for whole time slices normally but not while forbidden; a held `forbid()`
-shows in `tasks` as the BKL holder, which is free again afterwards), and checks terminal
+shows in `tasks` as the BKL holder, which is free again afterwards), checks `ps`
+and placement (with more than one core: `@N` pins a job to core N, two
+unpinned jobs land on different cores, and two spinners lose whole time slices
+when they share a core but not on separate cores; with one core, `@1` fails),
+and checks terminal
 colors and graphics pixels using QEMU screenshots. Virt optionally injects
 Shift/release, Backspace, Enter and scrollback through a VirtIO keyboard. UART
 observes output. `--repeat N` runs `allocprobe` N times: page runs, a `malloc`

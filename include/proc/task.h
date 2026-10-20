@@ -21,7 +21,7 @@
 // zombie, its memory still held so its exit code remains valid, until its
 // parent reaps it; a task whose parent exited first is reaped automatically.
 
-#define MAX_TASKS 8
+#define MAX_TASKS 16
 #define KSTACK_PAGES 4       // 16 KB kernel stack per task
 #define MAX_ARGS 16          // most argv entries a spawned program may receive
 #define MAX_OPEN_FILES 16    // open file/directory handles per task
@@ -66,6 +66,8 @@ struct cpu_context {
 typedef struct task {
     int pid;                          // >0 when in use, 0 when UNUSED (and task 0)
     task_state_t state;
+    unsigned core;                    // the core it runs on, for life
+    volatile bool on_cpu;             // running, or its core is switching away
     int exit_code;
     char name[TASK_NAME_MAX];
     struct task *parent;              // who spawned this task (NULL: the kernel)
@@ -92,11 +94,17 @@ typedef struct task {
 
 // Load the named program and create a runnable task for it: argv holds argc
 // string pointers (readable in the caller's address space), copied onto the
-// child's stack and delivered as main(argc, argv). The child does not run
-// until the caller blocks or yields. Returns the new task, or NULL.
-task_t *task_create(const char *name, int argc, char *const argv[]);
+// child's stack and delivered as main(argc, argv). The task runs on `core`
+// for life, or for -1 on the online core with the fewest tasks. Returns the
+// new task, or NULL (also for a core that does not exist or is offline).
+task_t *task_create(const char *name, int argc, char *const argv[], int core);
 
 #define SPAWN_NOWAIT 1  // return as soon as the child exists (a background job)
+// Run the child on core n (0..MAX_CPUS-1); without it the kernel picks the
+// least-loaded core. Bits 8..11 hold n + 1.
+#define SPAWN_CORE(n) ((((n) + 1) & 0xf) << 8)
+#define SPAWN_CORE_MASK 0xf00
+#define SPAWN_CORE_OF(flags) ((int)(((flags) & SPAWN_CORE_MASK) >> 8) - 1)
 
 // Create a task and, unless SPAWN_NOWAIT, block until it exits. Returns the
 // child's pid, or -1 on failure. The child stays an unreaped zombie until its
@@ -142,6 +150,10 @@ void task_init_boot(void);
 // On a secondary core: give it an idle task (pid 0) to be "current".
 void task_init_idle(void);
 
+// Run this core's idle loop for good: schedule its tasks, WFI in between
+// (the end of a secondary core's bring-up).
+void task_idle_forever(void) __attribute__((noreturn));
+
 // The big kernel lock (docs/locking.md). Taken on every kernel entry from EL0
 // and released on the way back (from src/arch/vectors.S), except while the task
 // is forbid()den; dropped while a task is switched out. The boot thread
@@ -181,6 +193,18 @@ void task_reap_all(void);
 // and the most any task has used since boot.
 size_t task_kstack_peak(const task_t *t);
 size_t task_kstack_peak_max(void);
+
+// task_info syscall (19): the index-th live task, in the layout of
+// user/libk/koraos.h's struct task_info. Returns 1, 0 past the last, -1 for a
+// bad pointer.
+struct ktask_info {
+    int32_t pid;
+    int32_t ppid;
+    uint32_t core;
+    uint32_t state;  // 0 running, 1 ready, 2 sleeping, 3 zombie
+    char name[TASK_NAME_MAX];
+};
+int task_info_get(unsigned index, struct ktask_info *out);
 
 // Visit every live task (for diagnostics).
 void task_for_each(void (*fn)(const task_t *t, void *ctx), void *ctx);

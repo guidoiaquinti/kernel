@@ -29,8 +29,10 @@ A program runs in EL0 with a deliberately small runtime:
   pools and usage.
 - **A flat identity map.** Pointers are physical addresses; e.g. `fb_info()`
   hands you the framebuffer address and you write pixels to it directly.
-- **Preemptive processes.** Every runnable program gets 10 ms time slices in
-  turn. `spawn` runs a child to completion before returning (then `wait` reaps
+- **Preemptive processes on every core.** Each program runs on one core for
+  life, the least-loaded one unless you choose (`SPAWN_CORE(n)`, or `cmd @n`
+  in the shell); programs on different cores run in parallel, and those on one
+  core get 10 ms time slices in turn. `ps` lists them. `spawn` runs a child to completion before returning (then `wait` reaps
   it); `spawn_flags(..., SPAWN_NOWAIT)` starts it in the background, and
   `waitpid(-1, &code, WNOHANG)` collects finished children without blocking.
   `msleep(ms)` sleeps; `uptime_us()` reads a microsecond clock without a

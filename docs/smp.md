@@ -1,9 +1,8 @@
 # Secondary cores
 
-KoraOS brings up every core of the machine (up to four). For now the other
-cores only idle with their own timer ticking; Milestone 7 PR 5 gives them run
-queues. Device interrupts and the Circle USB stack stay on core 0 for good
-(see [locking.md](locking.md)).
+KoraOS brings up every core of the machine (up to four) and runs programs on
+all of them. Device interrupts and the Circle USB stack stay on core 0 for
+good (see [locking.md](locking.md)).
 
 ## Releasing the cores
 
@@ -50,12 +49,40 @@ accesses bypass the caches while core 0's are cached:
   things it touches with its caches off; each `struct cpu` fills whole cache
   lines.
 
+## Scheduling on every core
+
+A task runs on one core for life, chosen when it is created
+(`sched_place`, [`src/proc/placement.c`](../src/proc/placement.c)): the core
+asked for (`SPAWN_CORE(n)`, the shell's `cmd args @n`), or else the online core
+with the fewest live tasks, the lowest-numbered on a tie. There is no
+migration and no work stealing; placement is explicit and predictable, in the
+spirit of TempleOS.
+
+Each core runs only its own tasks, round robin with its own 10 ms tick, so the
+task table filtered by core is that core's run queue. One IRQ-safe scheduler
+lock covers them all: wake-ups regularly cross cores (a keyboard interrupt on
+core 0 wakes a shell on core 1, a child's exit wakes its parent elsewhere), and
+with at most four cores serialized by the BKL, separate locks would only add
+lock ordering. A task woken for another core sets that core's reschedule flag;
+the core notices on its next interrupt, its own tick at the latest.
+
+Every core has an idle task that runs when none of its tasks can (`idleN` in
+`cpus`): it waits in `WFI` and looks for work after each interrupt. Core 0's
+idle task has a stack of its own, because core 0's boot thread is task 0, which
+blocks like any task. Since a task can exit on one core while its parent reaps
+it on another, a task is marked `on_cpu` until the next task on its core has
+left its stack; the reaper waits for that before freeing the kernel stack.
+
+`ps` lists every task with its core; the debug console's `tasks` and `cpus`
+show the kernel's view.
+
 ## Timers and interrupts
 
 Every core runs its own 100 Hz tick on its own generic timer, a per-core
 source (a GIC PPI, banked per core, or the core's local timer routing on the Pi
-3). Only core 0's tick is the system tick: the global tick count, the
-scheduler and the Circle timer hook. The debug console's `cpus` command shows
+3), which drives that core's scheduling. Core 0's tick is also the system
+tick: the global tick count (and so `msleep` deadlines) and the Circle timer
+hook. The debug console's `cpus` command shows
 each core with its own tick count and what it runs.
 
 ## Trying it

@@ -73,10 +73,16 @@ Each task has its own kernel stack, with its EL0 registers saved in a trap
 frame at the top and its kernel context (callee-saved registers and stack
 pointer) saved by `cpu_switch` when it is switched out
 ([`src/proc/task.c`](../src/proc/task.c)). The boot thread, which runs
-`kernel_main`, is task 0. Scheduling is **preemptive and single-core**:
+`kernel_main`, is task 0. Scheduling is **preemptive, on every core**:
 
-- The 100 Hz timer tick ends the running task's time slice; the switch to the
-  next runnable task (round robin) happens on its way back to EL0. The kernel
+- Each task runs on one core for life, chosen when it is created: the online
+  core with the fewest tasks, or the one asked for (`SPAWN_CORE(n)`, the
+  shell's `cmd @n`). Each core runs only its own tasks, so programs on
+  different cores run in parallel; a core with nothing to do runs its idle task
+  in `WFI` and picks up new work on its next tick (no inter-processor
+  interrupts), so a wake-up from another core takes up to 10 ms to start.
+- Each core's 100 Hz timer tick ends the running task's time slice; the switch
+  to that core's next runnable task (round robin) happens on its way back to EL0. The kernel
   itself is not preemptible: a task in a syscall runs until it returns or
   blocks.
 - A task **blocks** instead of spinning when it waits: for a child to exit

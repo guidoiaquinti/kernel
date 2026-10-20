@@ -111,6 +111,8 @@ static void help(void) {
     kputs("  quote paths containing spaces; backslash escapes the next character\n");
     kputs("  <program> [args...]  run a program from c:\n");
     kputs("  <program> [args...] &  run it in the background\n");
+    kputs("  <program> [args...] @N  run it on core N (with & too: ... @N &)\n");
+    kputs("  ps              list tasks and the core each runs on\n");
     kputs("programs in /bin: hello, echo, gfxdemo, termdemo, ls, cat (try 'ls /bin')\n");
 }
 
@@ -205,6 +207,34 @@ static int take_background(int *argc, char **argv) {
     return 1;
 }
 
+// A trailing "@N" word (after any "&" is taken off) pins the program to core
+// N: returns N, -1 if there is none, or -2 if the word is malformed. A quoted
+// or escaped "@2" is an ordinary argument.
+#define MAX_CORE_DIGITS 3
+
+static int take_core(int *argc, char **argv) {
+    if (*argc < 2) {
+        return -1;  // "@2" alone would be the program name
+    }
+    char *last = argv[*argc - 1];
+    if (literal_tokens[*argc - 1] || last[0] != '@') {
+        return -1;
+    }
+    int core = 0;
+    unsigned digits = 0;
+    for (const char *p = last + 1; *p; p++, digits++) {
+        if (*p < '0' || *p > '9' || digits == MAX_CORE_DIGITS) {
+            return -2;
+        }
+        core = core * 10 + (*p - '0');
+    }
+    if (digits == 0) {
+        return -2;
+    }
+    (*argc)--;
+    return core;
+}
+
 int main(void) {
     kputs("\nKoraOS shell. Type 'help'.\n");
 
@@ -291,11 +321,25 @@ int main(void) {
         if (argc == 0) {
             continue;
         }
-        int pid = spawn_flags(argv[0], argc, argv, background ? SPAWN_NOWAIT : 0);
+        int core = take_core(&argc, argv);
+        if (core == -2) {
+            kputs("shell: @N needs a core number, e.g. @1\n");
+            continue;
+        }
+        int flags = (background ? SPAWN_NOWAIT : 0) | (core >= 0 ? SPAWN_CORE(core) : 0);
+        int pid = spawn_flags(argv[0], argc, argv, flags);
         if (pid < 0) {
-            kputs("shell: no such program: ");
-            kputs(argv[0]);
-            kputs("\n");
+            if (core >= 0) {
+                kputs("shell: cannot run ");
+                kputs(argv[0]);
+                kputs(" on cpu ");
+                kput_int(core);
+                kputs(" (no such program, or no such core)\n");
+            } else {
+                kputs("shell: no such program: ");
+                kputs(argv[0]);
+                kputs("\n");
+            }
             continue;
         }
         if (background) {

@@ -16,6 +16,7 @@ struct task;
 struct cpu {
     unsigned id;
     struct task *curr;        // the task running on this core
+    struct task *switched_from;  // the task the last context switch left
     struct task *idle;        // its boot thread (task 0 on core 0)
     volatile bool need_resched;  // switch tasks on the next return to EL0
     struct task *fp_owner;    // whose state is in this core's FP/SIMD registers

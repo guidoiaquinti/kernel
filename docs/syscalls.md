@@ -38,6 +38,7 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 | 16 | `msleep` | `void msleep(unsigned long ms)` | `0`, after at least `ms` milliseconds |
 | 17 | `forbid` | `int forbid(void)` | new forbid depth |
 | 18 | `permit` | `int permit(void)` | new forbid depth, or `-1` if not forbidden |
+| 19 | `task_info` | `int task_info(unsigned index, struct task_info *out)` | `1` entry, `0` past the last, `-1` bad pointer |
 | 32 | `chdir` | `int chdir(const char *path)` | `0`, or `-1` |
 | 33 | `getcwd` | `int getcwd(char *buf, size_t size)` | `0`, or `-1` |
 | 34 | `volume_info` | `int volume_info(unsigned int index, struct volume_info *out)` | `1` item, `0` end, `-1` error |
@@ -70,7 +71,10 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
   0) it blocks the caller until the child has exited, then returns the child's
   pid; with `SPAWN_NOWAIT` it returns the pid at once and the child runs
   alongside (a background job). Either way, reap the child with `waitpid`.
-  libk's `spawn(name, argc, argv)` is the flags-0 form. `name` is resolved to a filesystem path: a bare
+  `SPAWN_CORE(n)` runs the child on core `n` for life (it fails if that core
+  does not exist or is offline); without it the kernel puts the child on the
+  online core with the fewest tasks. libk's `spawn(name, argc, argv)` is the
+  flags-0 form. `name` is resolved to a filesystem path: a bare
   name is looked up through `c:` (initially `sys:bin`), with no fallback to
   `/bin` if the assign or command is missing; other names use the caller's
   volume-aware path resolver (see
@@ -82,6 +86,10 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
   none has. `-1` means the caller has no such child. libk's `wait(pid)`
   returns the exit code directly. A child whose parent exits first becomes an
   orphan and is reaped by the kernel.
+- **`task_info`**: the `index`-th live task (0, 1, ...): pid, parent pid (0
+  for the kernel or an orphan), core, state (`TASK_RUNNING`, `TASK_READY`,
+  `TASK_SLEEPING`, `TASK_ZOMBIE`) and name. Each call is consistent; tasks may
+  come and go between calls. `/bin/ps` prints the list.
 - **`msleep`**: blocks for at least `ms` milliseconds, in whole 10 ms ticks
   (plus up to one tick); other tasks run meanwhile. `msleep(0)` yields.
 - **`forbid`** / **`permit`**: after AmigaOS's `Forbid()`/`Permit()`. `forbid`

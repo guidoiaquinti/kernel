@@ -19,7 +19,8 @@
 // Requests above DIRECT_THRESHOLD bypass the pools: they get their own page
 // run, with a header marking them as direct.
 //
-// Not thread safe yet: there is one thread per program until Milestone 7.
+// Thread safe: one mutex covers the whole heap. Calls are short (constant
+// time apart from asking the kernel for pages), so finer locking would not pay.
 
 #include "koraos.h"
 
@@ -59,6 +60,7 @@ static struct block *cached_empty;  // a whole free pool kept for reuse
 static size_t direct_count;
 static size_t direct_bytes;
 static size_t bad_frees;
+static mutex_t heap_lock = MUTEX_INIT;
 
 static size_t bsize(const struct block *b) {
     return b->size & ~F_MASK;
@@ -231,7 +233,7 @@ static void *direct_alloc(size_t size) {
     return payload(b);
 }
 
-void *malloc(size_t n) {
+static void *malloc_locked(size_t n) {
     if (n > ~0ul / 2) {
         return NULL;
     }
@@ -254,10 +256,7 @@ void *malloc(size_t n) {
     return payload(b);
 }
 
-void free(void *p) {
-    if (p == NULL) {
-        return;
-    }
+static void free_locked(void *p) {
     struct block *b = from_payload(p);
     if (((unsigned long)p & (ALIGN - 1)) != 0 || (b->size & F_FREE) != 0) {
         bad_frees++;  // misaligned pointer or double free: ignore it
@@ -302,6 +301,22 @@ void free(void *p) {
     }
 }
 
+void *malloc(size_t n) {
+    mutex_lock(&heap_lock);
+    void *p = malloc_locked(n);
+    mutex_unlock(&heap_lock);
+    return p;
+}
+
+void free(void *p) {
+    if (p == NULL) {
+        return;
+    }
+    mutex_lock(&heap_lock);
+    free_locked(p);
+    mutex_unlock(&heap_lock);
+}
+
 void *calloc(size_t count, size_t size) {
     if (size != 0 && count > ~0ul / size) {
         return NULL;
@@ -322,21 +337,24 @@ void *realloc(void *p, size_t n) {
         free(p);
         return NULL;
     }
+    mutex_lock(&heap_lock);
     struct block *b = from_payload(p);
     size_t have = bsize(b) - HDR;
-    if (n <= have) {
-        return p;
+    void *q = p;
+    if (n > have) {
+        q = malloc_locked(n);
+        if (q != NULL) {
+            memcpy(q, p, have);
+            free_locked(p);
+        }
     }
-    void *q = malloc(n);
-    if (q != NULL) {
-        memcpy(q, p, have);
-        free(p);
-    }
+    mutex_unlock(&heap_lock);
     return q;
 }
 
 void kheap_info(struct kheap_info *out) {
     memset(out, 0, sizeof(*out));
+    mutex_lock(&heap_lock);
     for (struct pool *pool = pools; pool != NULL; pool = pool->next) {
         out->pools++;
         struct block *b = (struct block *)(pool + 1);
@@ -368,4 +386,5 @@ void kheap_info(struct kheap_info *out) {
     out->direct_allocs = direct_count;
     out->direct_bytes = direct_bytes;
     out->bad_frees = bad_frees;
+    mutex_unlock(&heap_lock);
 }

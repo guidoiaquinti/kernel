@@ -94,14 +94,14 @@ static char *copy_user_path(const char *path) {
     return NULL;
 }
 
-// Look up an open file/directory handle by fd (>= FD_BASE) in the current task,
+// Look up an open file/directory handle by fd (>= FD_BASE) in the current process,
 // or NULL if the fd is out of range or not open.
 static open_file_t *fd_lookup(int fd) {
-    task_t *t = task_current();
-    if (t == NULL || fd < FD_BASE || fd >= FD_BASE + MAX_OPEN_FILES) {
+    struct process *p = proc_current();
+    if (p == NULL || fd < FD_BASE || fd >= FD_BASE + MAX_OPEN_FILES) {
         return NULL;
     }
-    open_file_t *of = &t->files[fd - FD_BASE];
+    open_file_t *of = &p->files[fd - FD_BASE];
     return of->used ? of : NULL;
 }
 
@@ -130,7 +130,11 @@ static long read_console_line(char *buf, uint64_t len) {
     uint64_t i = 0;
     enum { ESC_NONE, ESC_START, ESC_BODY } esc = ESC_NONE;
     while (i < len) {
-        char c = tty_getc();
+        int ch = tty_getc();
+        if (ch < 0) {
+            break;  // killed: the task dies on its way back to EL0
+        }
+        char c = (char)ch;
         if (c == 0x1b) {
             esc = ESC_START;
             continue;
@@ -196,13 +200,13 @@ static long sys_open(const char *path, int flags) {
     if (!uptr_ok((uint64_t)path, 1)) {
         return -1;
     }
-    task_t *t = task_current();
-    if (t == NULL) {
+    struct process *p = proc_current();
+    if (p == NULL) {
         return -1;
     }
     int idx = -1;
     for (int i = 0; i < MAX_OPEN_FILES; i++) {
-        if (!t->files[i].used) {
+        if (!p->files[i].used) {
             idx = i;
             break;
         }
@@ -215,16 +219,16 @@ static long sys_open(const char *path, int flags) {
         return -1;
     }
     fat32_file_t f;
-    int rc = fs_open_flags(&t->cwd, copy, mode, &f);
+    int rc = fs_open_flags(&p->cwd, copy, mode, &f);
     if (rc == FS_ERR_ISDIR && mode == FAT32_O_RDONLY) {
-        rc = fs_opendir(&t->cwd, copy, &f);  // a directory: open it for readdir
+        rc = fs_opendir(&p->cwd, copy, &f);  // a directory: open it for readdir
     }
     kfree(copy);
     if (rc != 0) {
         return -1;
     }
-    t->files[idx].file = f;
-    t->files[idx].used = true;
+    p->files[idx].file = f;
+    p->files[idx].used = true;
     return FD_BASE + idx;
 }
 
@@ -274,14 +278,14 @@ static long sys_stat(const char *path, struct kstat *out) {
     if (!uptr_ok((uint64_t)path, 1) || !uptr_ok((uint64_t)out, sizeof(*out))) {
         return -1;
     }
-    task_t *t = task_current();
+    struct process *p = proc_current();
     char *copy = copy_user_path(path);
-    if (t == NULL || copy == NULL) {
+    if (p == NULL || copy == NULL) {
         kfree(copy);
         return -1;
     }
     fat32_stat_t st;
-    int rc = fs_stat(&t->cwd, copy, &st);
+    int rc = fs_stat(&p->cwd, copy, &st);
     kfree(copy);
     if (rc != 0) {
         return -1;
@@ -292,23 +296,23 @@ static long sys_stat(const char *path, struct kstat *out) {
 }
 
 static long sys_chdir(const char *path) {
-    task_t *t = task_current();
+    struct process *p = proc_current();
     char *copy = copy_user_path(path);
-    if (t == NULL || copy == NULL) {
+    if (p == NULL || copy == NULL) {
         kfree(copy);
         return -1;
     }
-    int rc = fs_chdir(&t->cwd, copy);
+    int rc = fs_chdir(&p->cwd, copy);
     kfree(copy);
     return rc == 0 ? 0 : -1;
 }
 
 static long sys_getcwd(char *buf, uint64_t size) {
-    task_t *t = task_current();
-    if (t == NULL || !uptr_ok((uint64_t)buf, size)) {
+    struct process *p = proc_current();
+    if (p == NULL || !uptr_ok((uint64_t)buf, size)) {
         return -1;
     }
-    return fs_getcwd(&t->cwd, buf, (size_t)size) == 0 ? 0 : -1;
+    return fs_getcwd(&p->cwd, buf, (size_t)size) == 0 ? 0 : -1;
 }
 
 static long sys_volume_info(unsigned index, struct kvolume_info *out) {
@@ -344,8 +348,8 @@ static long sys_assign_info(unsigned index, struct kassign_info *out) {
 }
 
 static long sys_assign(const char *name, const char *target) {
-    task_t *t = task_current();
-    if (t == NULL) {
+    struct process *p = proc_current();
+    if (p == NULL) {
         return -1;
     }
     char *name_copy = copy_user_path(name);
@@ -355,25 +359,25 @@ static long sys_assign(const char *name, const char *target) {
         kfree(target_copy);
         return -1;
     }
-    int rc = fs_assign_set(&t->cwd, name_copy, target_copy);
+    int rc = fs_assign_set(&p->cwd, name_copy, target_copy);
     kfree(name_copy);
     kfree(target_copy);
     return rc == 0 ? 0 : -1;
 }
 
 static long sys_path_mutation(const char *path, int (*operation)(const fs_cwd_t *, const char *)) {
-    task_t *t = task_current();
-    if (t == NULL) return -1;
+    struct process *p = proc_current();
+    if (p == NULL) return -1;
     char *copy = copy_user_path(path);
     if (copy == NULL) return -1;
-    int rc = operation(&t->cwd, copy);
+    int rc = operation(&p->cwd, copy);
     kfree(copy);
     return rc == 0 ? 0 : -1;
 }
 
 static long sys_rename(const char *old_path, const char *new_path) {
-    task_t *t = task_current();
-    if (t == NULL) return -1;
+    struct process *p = proc_current();
+    if (p == NULL) return -1;
     char *old_copy = copy_user_path(old_path);
     char *new_copy = copy_user_path(new_path);
     if (old_copy == NULL || new_copy == NULL) {
@@ -381,31 +385,31 @@ static long sys_rename(const char *old_path, const char *new_path) {
         kfree(new_copy);
         return -1;
     }
-    int rc = fs_rename(&t->cwd, old_copy, new_copy);
+    int rc = fs_rename(&p->cwd, old_copy, new_copy);
     kfree(old_copy);
     kfree(new_copy);
     return rc == 0 ? 0 : -1;
 }
 
-// alloc_pages(count): give the calling task `count` contiguous zeroed pages,
-// tracked so they are reclaimed when the task is reaped. Returns the base
+// alloc_pages(count): give the calling process `count` contiguous zeroed pages,
+// tracked so they are reclaimed when the process is reaped. Returns the base
 // address, or 0 on failure.
 static long sys_alloc_pages(uint64_t count) {
-    task_t *t = task_current();
-    if (t == NULL || count > frame_alloc_total_count()) {
+    struct process *p = proc_current();
+    if (p == NULL || count > frame_alloc_total_count()) {
         return 0;
     }
-    return (long)(uintptr_t)user_pages_alloc(t, (size_t)count);
+    return (long)(uintptr_t)user_pages_alloc(p, (size_t)count);
 }
 
 // free_pages(base): return a run from alloc_pages. Returns 0, or -1 if the
 // caller owns no run starting at `base`.
 static long sys_free_pages(uint64_t base) {
-    task_t *t = task_current();
-    if (t == NULL) {
+    struct process *p = proc_current();
+    if (p == NULL) {
         return -1;
     }
-    return user_pages_free(t, (void *)(uintptr_t)base);
+    return user_pages_free(p, (void *)(uintptr_t)base);
 }
 
 // spawn(name, argc, argv): load and run an embedded program with arguments.
@@ -530,6 +534,20 @@ void syscall_handle(struct trapframe *tf) {
         break;
     case SYS_permit:
         ret = task_permit();
+        break;
+    case SYS_thread_new:
+        ret = a0 != 0 ? task_thread_create(a0, a1, a2, (int)a3) : -1;
+        break;
+    case SYS_thread_exit:
+        task_thread_exit((long)a0);  // does not return
+        break;
+    case SYS_thread_join:
+        ret = a1 == 0 || uptr_ok(a1, sizeof(long))
+                  ? task_thread_join((int)a0, (long *)a1)
+                  : -1;
+        break;
+    case SYS_kill:
+        ret = task_kill((int)a0);
         break;
     case SYS_task_info:
         ret = uptr_ok(a1, sizeof(struct ktask_info))

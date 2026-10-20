@@ -142,10 +142,12 @@ el0_irq:
     kernel_exit
 
 // A new task's first return to EL0: cpu_switch() lands here with sp pointing
-// at the trap frame task_create() prepared at the top of its kernel stack.
+// at the trap frame thread_setup() prepared at the top of its kernel stack. It
+// may have been killed before it ever ran: sched_preempt_check lets it die.
 .global ret_to_user
 ret_to_user:
     bl  schedule_tail
+    bl  sched_preempt_check
     kernel_exit
 
 // --- Invalid / unexpected entries (numbered by vector index) ---

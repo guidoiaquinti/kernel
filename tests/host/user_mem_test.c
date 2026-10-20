@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Host tests for per-task user page runs (src/proc/user_mem.c): the bookkeeping
-// behind the alloc_pages/free_pages syscalls and the reclaim on task teardown.
+// Host tests for per-process user page runs (src/proc/user_mem.c): the bookkeeping
+// behind the alloc_pages/free_pages syscalls and the reclaim on process teardown.
 // The frame allocator and the kernel heap are stubbed with host memory and
 // failure switches; every stub allocation is tracked to catch leaks.
 
@@ -47,7 +47,7 @@ void kfree(void *ptr) {
 }
 
 static void test_alloc_free(void) {
-    task_t t = {0};
+    struct process t = {0};
     void *a = user_pages_alloc(&t, 1);
     void *b = user_pages_alloc(&t, 5);
     void *c = user_pages_alloc(&t, 2);
@@ -65,11 +65,11 @@ static void test_alloc_free(void) {
           "release_all left %d frames, %d records", frames_live, records_live);
 }
 
-static void test_runs_are_per_task(void) {
-    task_t t1 = {0};
-    task_t t2 = {0};
+static void test_runs_are_per_process(void) {
+    struct process t1 = {0};
+    struct process t2 = {0};
     void *a = user_pages_alloc(&t1, 1);
-    CHECK(user_pages_free(&t2, a) == -1, "another task freed t1's run");
+    CHECK(user_pages_free(&t2, a) == -1, "another process freed t1's run");
     user_pages_release_all(&t2);
     CHECK(user_pages_count(&t1, NULL) == 1, "t1 lost its run");
     user_pages_release_all(&t1);
@@ -77,7 +77,7 @@ static void test_runs_are_per_task(void) {
 }
 
 static void test_failures_leak_nothing(void) {
-    task_t t = {0};
+    struct process t = {0};
     fail_records = true;
     CHECK(user_pages_alloc(&t, 1) == NULL, "succeeded without a record");
     fail_records = false;
@@ -88,4 +88,4 @@ static void test_failures_leak_nothing(void) {
           "failure leaked %d frames, %d records", frames_live, records_live);
 }
 
-TEST_MAIN(test_alloc_free, test_runs_are_per_task, test_failures_leak_nothing)
+TEST_MAIN(test_alloc_free, test_runs_are_per_process, test_failures_leak_nothing)

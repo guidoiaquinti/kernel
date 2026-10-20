@@ -67,7 +67,9 @@ TEST_FLAGS=(-DKORAOS_HOST_TEST -DSPINLOCK_PORTABLE -pthread -I "$ROOT/tests/host
 TEST_FLAGS=()
 run_test user_mem src/proc/user_mem.c
 TEST_FLAGS=(-DLIBK_HOST_TEST -I "$ROOT/user/libk")
-run_test libk_malloc user/libk/malloc.c
+run_test libk_malloc user/libk/malloc.c user/libk/mutex.c
+TEST_FLAGS=(-DLIBK_HOST_TEST -pthread -I "$ROOT/user/libk")
+run_test libk_threads user/libk/malloc.c user/libk/mutex.c user/libk/job.c
 TEST_FLAGS=()
 "$ROOT/tests/run-filesystem-tests.sh" || failed=1
 "$ROOT/tests/run-fat-write-tests.sh" || failed=1

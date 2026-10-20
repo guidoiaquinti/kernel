@@ -76,6 +76,23 @@ left its stack; the reaper waits for that before freeing the kernel stack.
 `ps` lists every task with its core; the debug console's `tasks` and `cpus`
 show the kernel's view.
 
+## Threads and jobs
+
+A program can run on several cores at once with threads: a thread is a task
+of the same process, with its own user and kernel stacks and FP/SIMD state,
+sharing the image, heap, page runs, open files and cwd (with one flat address
+space there are no page tables to share). `thread_create(fn, arg, core)`
+places it exactly like `spawn` places a program, on the core asked for or the
+least-loaded one, for life; `thread_join` collects its result. On top, libk's
+TempleOS-style job API queues a function to a core and collects the result
+later (`job_queue`, `job_result`), one thread per job.
+
+A process lives until its last thread exits. `exit()` from any thread, or
+`kill()`, marks the others killed; each dies on its own core at its next
+kernel entry or return to EL0, so no inter-processor interrupt is needed (see
+[locking.md](locking.md)). libk's `malloc` takes a mutex (`mutex_t`: spin, then
+`yield()`), so every thread can share one heap.
+
 ## Timers and interrupts
 
 Every core runs its own 100 Hz tick on its own generic timer, a per-core

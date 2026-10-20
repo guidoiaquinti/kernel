@@ -4,7 +4,7 @@
 
 // KoraOS private syscall ABI (not POSIX-numbered, but the calls are shaped like
 // the POSIX ones to ease porting later):
-//   x8 = syscall number, x0..x2 = args, svc #0, return value in x0.
+//   x8 = syscall number, x0..x3 = args, svc #0, return value in x0.
 // These numbers must match the userland side in user/libk/abi.h. Not all are
 // serviced yet; unimplemented numbers return -1.
 #define SYS_write  0
@@ -27,7 +27,11 @@
 #define SYS_forbid      17
 #define SYS_permit      18
 #define SYS_task_info   19
-// Slots 20 through 31 are reserved for task and memory work.
+#define SYS_thread_new  20
+#define SYS_thread_exit 21
+#define SYS_thread_join 22
+#define SYS_kill        23
+// Slots 24 through 31 are reserved for task and memory work.
 #define SYS_chdir   32
 #define SYS_getcwd  33
 #define SYS_volume_info 34

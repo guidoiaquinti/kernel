@@ -114,7 +114,8 @@ static void help(void) {
     kputs("  <program> [args...] @N  run it on core N (with & too: ... @N &)\n");
     kputs("  ps              list tasks and the core each runs on\n");
     kputs("  kill <pid>      end a program (a background job)\n");
-    kputs("programs in /bin: hello, echo, gfxdemo, termdemo, ls, cat (try 'ls /bin')\n");
+    kputs("programs in /bin: hello, echo, gfxdemo, termdemo, jobdemo, pindemo, ls, cat\n");
+    kputs("  (try 'ls /bin')\n");
 }
 
 static void print_cwd(void) {

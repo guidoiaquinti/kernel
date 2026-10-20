@@ -274,23 +274,24 @@ static void proc_free(struct process *p) {
 // BKL a lock per queue would only add lock ordering. The woken task's core
 // notices on its next interrupt (its tick, within 10 ms): no IPIs.
 
+// Run-queue slot 0 is the boot task, slot i + 1 is tasks[i].
+static task_t *slot_task(int slot) {
+    return slot == 0 ? &boot_task : &tasks[slot - 1];
+}
+
+static bool runnable_on(int slot, void *core) {
+    const task_t *t = slot_task(slot);
+    return t->state == TASK_RUNNABLE && t->core == *(const unsigned *)core;
+}
+
 // The next runnable task of `core` after `from` in round-robin order over the
 // boot task (core 0) and the table, or `from` itself if nothing else can run,
-// or NULL. Idle tasks are not candidates: switch_away falls back to them.
+// or NULL. Idle tasks are not candidates: switch_away falls back to them (and
+// the round starts at the table, as after the boot task).
 static task_t *pick_next(unsigned core, task_t *from) {
-    int slots = MAX_TASKS + 1;  // slot 0 is the boot task
-    int start = 0;
-    if (from >= tasks && from < tasks + MAX_TASKS) {
-        start = (int)(from - tasks) + 1;
-    }
-    for (int i = 1; i <= slots; i++) {
-        int slot = (start + i) % slots;
-        task_t *t = slot == 0 ? &boot_task : &tasks[slot - 1];
-        if (t->state == TASK_RUNNABLE && t->core == core) {
-            return t;
-        }
-    }
-    return NULL;
+    int from_slot = from >= tasks && from < tasks + MAX_TASKS ? (int)(from - tasks) + 1 : 0;
+    int slot = sched_round_robin(MAX_TASKS + 1, from_slot, runnable_on, &core);
+    return slot >= 0 ? slot_task(slot) : NULL;
 }
 
 // After a context switch, on the incoming task's stack: the outgoing task is
@@ -471,8 +472,7 @@ void wait_queue_wake_all(struct wait_queue *wq) {
 }
 
 void task_msleep(uint64_t ms) {
-    uint64_t hz = systick_hz();
-    uint64_t ticks = hz != 0 ? (ms * hz + 999) / 1000 : 0;
+    uint64_t ticks = sched_sleep_ticks(ms, systick_hz());
     if (ticks == 0) {
         task_yield();
         return;
@@ -481,8 +481,7 @@ void task_msleep(uint64_t ms) {
     if (!current->killed) {
         current->state = TASK_BLOCKED;
         current->blocked_on = BLOCK_SLEEP;
-        // The current tick is already partly over: one more guarantees the minimum.
-        current->wake_tick = systick_count() + ticks + 1;
+        current->wake_tick = systick_count() + ticks;
     }
     block_and_switch(flags);
 }
@@ -1067,6 +1066,19 @@ int task_info_get(unsigned index, struct ktask_info *out) {
     }
     spin_unlock_irqrestore(&sched_lock, flags);
     return found;
+}
+
+void task_counts(unsigned *ntasks, unsigned *nprocs) {
+    unsigned t = 0;
+    unsigned p = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        t += tasks[i].state != TASK_UNUSED;
+    }
+    for (int i = 0; i < MAX_PROCS; i++) {
+        p += procs[i].pid != 0;
+    }
+    *ntasks = t;
+    *nprocs = p;
 }
 
 void task_for_each(void (*fn)(const task_t *t, void *ctx), void *ctx) {

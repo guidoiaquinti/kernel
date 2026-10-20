@@ -214,7 +214,8 @@ def core_of(q, name):
     raise Failure("ps does not list %s" % name)
 
 
-def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1):
+def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1,
+        stress=0):
     """Yield (name, check) steps; each check raises Failure on error."""
 
     def boot():
@@ -772,6 +773,70 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
             raise Failure("threadprobe tasks outlived kill: %s" % left)
     yield "kill ends a multi-threaded background job on every core", kill_job
 
+    def jobdemo():
+        # One job, then one per core: the renderings must agree (the demo
+        # checks), and with several cores the jobs must run in parallel. The
+        # thread start and join each wait up to a tick (no IPIs), and the host
+        # adds noise, hence a modest bar and a few attempts.
+        for attempt in range(3):
+            q.send("jobdemo 256\r")
+            m = q.expect(rb"^jobdemo: (?:(\d+)x(\d+), 256 iterations: 1 core (\d+) ms, %d cores? "
+                         rb"(\d+) ms, speedup (\d+)\.(\d\d)x(, press Enter)?|([^\r\n]*))\r?\n"
+                         % cores, timeout=120)
+            if m.group(8) is not None:
+                raise Failure("jobdemo: %s" % m.group(8).decode(errors="replace"))
+            if graphics != (m.group(7) is not None):
+                raise Failure("jobdemo %s the picture with graphics %s"
+                              % ("kept" if m.group(7) else "did not keep", "on" if graphics else "off"))
+            if graphics:
+                # The line reaches the serial port before the screen terminal
+                # has redrawn its text, and jobdemo puts the picture back only
+                # after that: wait for the whole picture, the top-left corner
+                # (far outside the set: dark blue, not text) included.
+                for _ in range(20):
+                    shot = q.screendump("jobdemo")
+                    colours = {shot[2][i:i + 3] for i in range(0, len(shot[2]), 3)}
+                    r, g, b = pixel(shot, 2, 2)
+                    if len(colours) >= 40 and b >= 64 and r < 32 and g < 32:
+                        break
+                    time.sleep(0.2)
+                else:
+                    raise Failure("expected the Mandelbrot set on screen: %d colours, top left %s"
+                                  % (len(colours), pixel(shot, 2, 2)))
+                q.send("\r")
+            q.expect(rb"\] exited with 0")
+            q.expect(PROMPT)
+            speedup = int(m.group(5)) + int(m.group(6)) / 100
+            if cores == 1 or speedup >= 1.4:
+                break
+        else:
+            raise Failure("jobdemo on %d cores: speedup only %.2fx" % (cores, speedup))
+    yield "jobdemo: Mandelbrot as one job, then one job per core", jobdemo
+
+    def pindemo():
+        specs = (["6@1", "2@2", "2@2", "2@2"] if cores >= 3 else
+                 ["2@1", "1@0", "1@1"] if cores == 2 else ["2", "1", "1"])
+        q.send("pindemo %s\r" % " ".join(specs))
+        for _ in specs:
+            m = q.expect(rb"^pindemo: (?:worker (\d+) \((\d+) units?, cpu (\d+|\?)( pinned)?\) done|"
+                         rb"([^\r\n]*)\r?\n)", timeout=120)
+            if m.group(5) is not None:
+                raise Failure("pindemo: %s" % m.group(5).decode(errors="replace"))
+            spec = specs[int(m.group(1)) - 1]
+            if "@" in spec and m.group(3).decode() != spec.split("@")[1]:
+                raise Failure("pindemo worker %s ran on cpu %s" % (spec, m.group(3).decode()))
+        q.expect(rb"^pindemo: %d workers done in \d+ ms" % len(specs))
+        q.expect(rb"\] exited with 0")
+        q.expect(PROMPT)
+    yield "pindemo: unbalanced sub-processes pinned by hand", pindemo
+
+    if stress:
+        def stress_rounds():
+            for _ in range(stress):
+                for check in (threads, thread_lifetime, kill_job, jobdemo, pindemo):
+                    check()
+        yield "stress: %d rounds of threads, process lifetime, kill and both demos" % stress, stress_rounds
+
     if repeat:
         def allocation_lifetime():
             baseline = None
@@ -856,6 +921,8 @@ def main():
     parser.add_argument("--smp", type=int, default=1,
                         help="virt cores (raspi3b always has 4); all must come online")
     parser.add_argument("--repeat", type=int, default=0, help="repeat the EL0 page/malloc/nested-process probe")
+    parser.add_argument("--stress", type=int, default=0,
+                        help="rounds of the thread, kill and demo steps to repeat at the end")
     parser.add_argument("--expect-root-failure", action="store_true", help="require a configured disk mount failure")
     parser.add_argument("--keyboard", action="store_true", help="inject keys through a VirtIO keyboard")
     parser.add_argument("--disk", help="external bare FAT32 or MBR FAT32 disk for virt")
@@ -878,6 +945,8 @@ def main():
     kernel_dir = os.path.join(os.path.abspath(args.build_dir),
                               "release" if args.release else "debug", args.target)
     args.out = args.out or os.path.join(kernel_dir, "qemu-smoke")
+    if args.stress < 0 or args.stress > 100:
+        parser.error("--stress must be between 0 and 100")
     if args.repeat < 0 or args.repeat > 2000:
         parser.error("--repeat must be between 0 and 2000")
     if args.el2 and args.machine != "virt":
@@ -949,7 +1018,7 @@ def main():
         if args.keyboard:
             q.expect(rb"\[virtio-input\] keyboard ready")
         for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume,
-                               args.write_test, cores):
+                               args.write_test, cores, args.stress):
             try:
                 check()
                 print("ok   - " + name)

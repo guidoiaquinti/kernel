@@ -33,6 +33,7 @@
 #define SYS_THREAD_EXIT 21
 #define SYS_THREAD_JOIN 22
 #define SYS_KILL        23
+#define SYS_SYSINFO     24
 
 #define SYS_CHDIR 32
 #define SYS_GETCWD 33

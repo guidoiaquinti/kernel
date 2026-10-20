@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Host tests for libk under threads: the mutex (user/libk/mutex.c), malloc
+// Host tests for libk under threads: the atomics (koraos.h), the mutex
+// (user/libk/mutex.c), malloc
 // shared by many threads at once (user/libk/malloc.c) and the job API
 // (user/libk/job.c). Built with LIBK_HOST_TEST and -pthread: host threads
 // stand in for KoraOS threads (thread_new/thread_join are stubbed with
@@ -193,6 +194,50 @@ static void test_mutex_excludes(void) {
     mutex_unlock(&counter_lock);
 }
 
+// Atomics: every worker adds through each operation; any lost update shows
+// in the totals.
+static long added;
+static volatile int cas_count;
+static unsigned long swaps;
+static int *volatile last_owner;
+static int owners[WORKERS];
+
+#define ATOMIC_ROUNDS 100000
+
+static void *hammer_atomics(void *arg) {
+    unsigned id = (unsigned)(unsigned long)arg;
+    for (unsigned i = 0; i < ATOMIC_ROUNDS; i++) {
+        atomic_inc(&added);
+        atomic_add(&added, 3);
+        atomic_dec(&added);
+        int seen;
+        do {
+            seen = atomic_get(&cas_count);
+        } while (!atomic_cas(&cas_count, seen, seen + 1));
+        // Swap our own pointer in: whatever came out was someone's (or NULL once).
+        int *previous = atomic_swap(&last_owner, &owners[id]);
+        if (previous != NULL) {
+            atomic_inc(&swaps);
+        }
+    }
+    return NULL;
+}
+
+static void test_atomics(void) {
+    run_workers(hammer_atomics);
+    long rounds = (long)WORKERS * ATOMIC_ROUNDS;
+    CHECK(atomic_get(&added) == 3 * rounds, "atomic_add total %ld, want %ld", added, 3 * rounds);
+    CHECK(cas_count == rounds, "atomic_cas total %d, want %ld", cas_count, rounds);
+    CHECK(swaps == (unsigned long)rounds - 1, "atomic_swap handed over %lu, want %ld", swaps,
+          rounds - 1);
+    int x = 5;
+    CHECK(!atomic_cas(&x, 4, 9) && x == 5, "cas with a stale value changed it");
+    CHECK(atomic_cas(&x, 5, 9) && x == 9, "cas with the right value failed");
+    CHECK(atomic_add(&x, -10) == -1 && atomic_swap(&x, 7) == -1, "add returns the new value");
+    atomic_set(&x, 2);
+    CHECK(atomic_get(&x) == 2, "set/get");
+}
+
 // Every worker keeps a set of live blocks, each filled with a pattern unique
 // to the worker and block; any overlap between threads shows up as a mismatch.
 #define SLOTS 64
@@ -292,4 +337,4 @@ static void test_cleanup(void) {
     release_all_runs();  // the heap's cached pools: LSan must see no leaks
 }
 
-TEST_MAIN(test_mutex_excludes, test_malloc_parallel, test_jobs, test_cleanup)
+TEST_MAIN(test_atomics, test_mutex_excludes, test_malloc_parallel, test_jobs, test_cleanup)

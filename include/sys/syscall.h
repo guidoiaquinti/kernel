@@ -31,7 +31,8 @@
 #define SYS_thread_exit 21
 #define SYS_thread_join 22
 #define SYS_kill        23
-// Slots 24 through 31 are reserved for task and memory work.
+#define SYS_sysinfo     24
+// Slots 25 through 31 are reserved for task and memory work.
 #define SYS_chdir   32
 #define SYS_getcwd  33
 #define SYS_volume_info 34

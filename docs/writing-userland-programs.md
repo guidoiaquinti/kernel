@@ -51,7 +51,13 @@ A program runs in EL0 with a deliberately small runtime:
   thread (or returning from `main`) ends the whole program, all threads
   included; if the main thread calls `thread_exit` instead, the program runs
   on until its last thread ends. About 32 tasks exist system-wide, so join
-  threads before starting many more.
+  threads before starting many more. `sysinfo()` tells how many cores are
+  online. For lock-free counters and flags, libk has atomics on any `int`,
+  `long` or pointer: `atomic_get`/`atomic_set` (acquire/release),
+  `atomic_add` (returns the new value), `atomic_inc`/`atomic_dec`,
+  `atomic_swap` and `atomic_cas`, plus `cpu_relax()` for spin loops.
+  [`user/jobdemo.c`](../user/jobdemo.c) and [`user/pindemo.c`](../user/pindemo.c)
+  are worked examples of jobs and of pinned sub-processes.
 - **`main` signature.** Either `int main(void)` or `int main(int argc, char
   **argv)`; the entry stub [`user/crt0.S`](../user/crt0.S) calls `main` and
   passes its return value to `exit`.

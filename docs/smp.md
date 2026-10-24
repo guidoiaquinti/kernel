@@ -93,6 +93,23 @@ kernel entry or return to EL0, so no inter-processor interrupt is needed (see
 [locking.md](locking.md)). libk's `malloc` takes a mutex (`mutex_t`: spin, then
 `yield()`), so every thread can share one heap.
 
+Two demos show both styles of placement:
+
+- `jobdemo [iterations]` renders the Mandelbrot set (integer fixed point) as
+  one job on core 0, then as one job per online core (every n-th row each),
+  checks that both agree and prints the times and the speedup. The picture
+  stays on screen until Enter.
+- `pindemo [units[@core] ...]` starts worker processes with uneven amounts of
+  work (a unit is about 100 ms of one core), pinned where you say. Its default
+  on three or more cores, `6@1 2@2 2@2 2@2`, puts the heavy worker alone on
+  core 1 and the three light ones together on core 2, so all four finish at
+  about the same time.
+
+Without inter-processor interrupts, a thread placed on an idle core starts on
+that core's next tick, and a thread woken from another core continues on its
+own next tick, so a parallel job pays up to 10 ms at each end. It only shows
+on short jobs (`jobdemo 64`).
+
 ## Timers and interrupts
 
 Every core runs its own 100 Hz tick on its own generic timer, a per-core

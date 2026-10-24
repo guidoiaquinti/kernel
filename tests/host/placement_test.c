@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Host tests for task placement (src/proc/placement.c).
+// Host tests for task placement and the run-queue order (src/proc/placement.c).
 #include "proc/placement.h"
 #include "test.h"
 
@@ -40,4 +40,59 @@ static void requested(void) {
     CHECK(sched_place(load, online, 4, 14) == -1, "far out of range refused");
 }
 
-TEST_MAIN(least_loaded, spreading, requested)
+// A toy task table for sched_round_robin: which core each slot's task runs
+// on and whether it is runnable.
+struct queue {
+    unsigned core[8];
+    bool runnable[8];
+    unsigned want;  // the core picking
+};
+
+static bool can_run(int slot, void *ctx) {
+    const struct queue *q = ctx;
+    return q->runnable[slot] && q->core[slot] == q->want;
+}
+
+static void round_robin(void) {
+    struct queue q = {
+        .core = {0, 1, 0, 0, 1, 0, 2, 0},
+        .runnable = {true, true, true, false, true, true, true, false},
+        .want = 0,
+    };
+    // Core 0's runnable slots are 0, 2 and 5: each turn passes to the next.
+    CHECK(sched_round_robin(8, 0, can_run, &q) == 2, "0 -> 2");
+    CHECK(sched_round_robin(8, 2, can_run, &q) == 5, "2 -> 5, skipping a blocked task");
+    CHECK(sched_round_robin(8, 5, can_run, &q) == 0, "5 wraps around to 0");
+    CHECK(sched_round_robin(8, 3, can_run, &q) == 5, "from a task that just blocked");
+    CHECK(sched_round_robin(8, -1, can_run, &q) == 0, "no previous slot: start at 0");
+    // Other cores' tasks are never picked.
+    q.want = 2;
+    CHECK(sched_round_robin(8, 6, can_run, &q) == 6, "the only task keeps running");
+    q.want = 1;
+    CHECK(sched_round_robin(8, 1, can_run, &q) == 4, "core 1: 1 -> 4");
+    CHECK(sched_round_robin(8, 4, can_run, &q) == 1, "core 1: 4 -> 1");
+    q.want = 3;
+    CHECK(sched_round_robin(8, 0, can_run, &q) == -1, "nothing runnable: idle");
+    // A full round visits every runnable task of the core exactly once.
+    q.want = 0;
+    unsigned seen[8] = {0};
+    int slot = 0;
+    for (int turn = 0; turn < 9; turn++) {
+        slot = sched_round_robin(8, slot, can_run, &q);
+        seen[slot]++;
+    }
+    CHECK(seen[0] == 3 && seen[2] == 3 && seen[5] == 3, "fair turns %u/%u/%u", seen[0],
+          seen[2], seen[5]);
+}
+
+static void sleep_ticks(void) {
+    CHECK(sched_sleep_ticks(0, 100) == 0, "0 ms only yields");
+    CHECK(sched_sleep_ticks(5, 0) == 0, "no tick rate: yield");
+    CHECK(sched_sleep_ticks(1, 100) == 2, "1 ms: a whole tick, plus the partial one");
+    CHECK(sched_sleep_ticks(10, 100) == 2, "10 ms is one tick, plus one");
+    CHECK(sched_sleep_ticks(11, 100) == 3, "11 ms rounds up to two ticks");
+    CHECK(sched_sleep_ticks(300, 100) == 31, "300 ms");
+    CHECK(sched_sleep_ticks(600000, 1000) == 600001, "10 minutes at 1 kHz");
+}
+
+TEST_MAIN(least_loaded, spreading, requested, round_robin, sleep_ticks)

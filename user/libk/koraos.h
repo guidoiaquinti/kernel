@@ -207,6 +207,22 @@ struct task_info {
  * come and go in between. */
 int task_info(unsigned index, struct task_info *out);
 
+/* The machine at a glance: sysinfo() fills *out (0, or -1 on a bad pointer). */
+struct sysinfo {
+    unsigned int cpus;          /* cores online: use 0 .. cpus - 1 */
+    unsigned int cpus_max;      /* cores the kernel manages */
+    unsigned int tick_hz;       /* scheduler ticks per second */
+    unsigned int page_size;
+    unsigned int tasks;         /* live tasks (threads), zombies included */
+    unsigned int tasks_max;
+    unsigned int procs;         /* live programs, zombies included */
+    unsigned int procs_max;
+    unsigned long pages_total;  /* the page pool programs allocate from */
+    unsigned long pages_free;
+    unsigned long ticks;        /* ticks since boot */
+};
+int sysinfo(struct sysinfo *out);
+
 /* Threads. A thread runs fn(arg) inside this program, sharing its memory, heap,
  * open files and cwd, with a 16 KB stack and FP/SIMD registers of its own. It
  * stays on `core` (0..3) for life; -1 picks the online core with the fewest
@@ -226,6 +242,34 @@ void libk_thread_start(void);  /* user/libk/syscall.S */
 
 static inline int thread_create(thread_fn fn, void *arg, int core) {
     return thread_new(libk_thread_start, fn, arg, core);
+}
+
+/* Atomics, for data the threads of a program share, on any int, long or
+ * pointer object. Every operation is sequentially consistent except
+ * atomic_get (an acquire load) and atomic_set (a release store). The names
+ * stay clear of C11's <stdatomic.h>. On the Cortex-A53 they compile to
+ * load-acquire/store-exclusive loops.
+ *   atomic_get(p)            *p
+ *   atomic_set(p, v)         *p = v
+ *   atomic_add(p, v)         *p += v, returns the new value (v may be < 0)
+ *   atomic_inc(p), atomic_dec(p)   the same with 1 and -1
+ *   atomic_swap(p, v)        *p = v, returns the old value
+ *   atomic_cas(p, old, new)  if *p == old, *p = new; returns 1 if it did
+ * cpu_relax() belongs in a spin-wait loop: it tells the core it is waiting. */
+#define atomic_get(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#define atomic_set(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
+#define atomic_add(p, v) __atomic_add_fetch((p), (v), __ATOMIC_SEQ_CST)
+#define atomic_inc(p) atomic_add((p), 1)
+#define atomic_dec(p) atomic_add((p), -1)
+#define atomic_swap(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
+#define atomic_cas(p, old, new) __sync_bool_compare_and_swap((p), (old), (new))
+
+static inline void cpu_relax(void) {
+#if defined(__aarch64__)
+    __asm__ volatile("yield" ::: "memory");
+#else
+    __asm__ volatile("" ::: "memory");
+#endif
 }
 
 /* A lock for data the threads of a program share (user/libk/mutex.c). The

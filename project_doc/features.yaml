@@ -216,6 +216,13 @@ categories:
         milestone: 7
         completed: 2026-10-19
         prs: [52, 60]
+      - id: multicore-demos
+        name: Multicore demos
+        status: completed
+        description: A Mandelbrot rendered as one job per core, and hand-pinned unbalanced sub-processes.
+        milestone: 7
+        completed: 2026-10-20
+        prs: [62]
       - id: basic
         name: BASIC
         status: wish

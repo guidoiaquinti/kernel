@@ -43,6 +43,7 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
 | 21 | `thread_exit` | `void thread_exit(long value)` | does not return |
 | 22 | `thread_join` | `int thread_join(int tid, long *value)` | `0`, or `-1` |
 | 23 | `kill` | `int kill(int pid)` | `0`, or `-1` if there is no such running program |
+| 24 | `sysinfo` | `int sysinfo(struct sysinfo *out)` | `0`, or `-1` bad pointer |
 | 32 | `chdir` | `int chdir(const char *path)` | `0`, or `-1` |
 | 33 | `getcwd` | `int getcwd(char *buf, size_t size)` | `0`, or `-1` |
 | 34 | `volume_info` | `int volume_info(unsigned int index, struct volume_info *out)` | `1` item, `0` end, `-1` error |
@@ -124,6 +125,11 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
   up its call. A forbidden thread keeps the BKL, so `kill` waits until it
   permits. There are no signals: the program cannot catch it. Its parent
   still reaps it. The shell's `kill <pid>` uses it.
+- **`sysinfo`**: the machine at a glance: cores online (use cores `0` to
+  `cpus - 1` with `SPAWN_CORE` and `thread_create`) and the most the kernel
+  manages, the tick rate and ticks since boot, the page size and the page
+  pool's total and free pages, and live tasks and programs (zombies included)
+  with their limits.
 - **`msleep`**: blocks for at least `ms` milliseconds, in whole 10 ms ticks
   (plus up to one tick); other tasks run meanwhile. `msleep(0)` yields.
 - **`forbid`** / **`permit`**: after AmigaOS's `Forbid()`/`Permit()`. `forbid`

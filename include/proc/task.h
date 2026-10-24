@@ -274,6 +274,9 @@ struct ktask_info {
 };
 int task_info_get(unsigned index, struct ktask_info *out);
 
+// Live tasks (threads) and processes, zombies included (for sysinfo).
+void task_counts(unsigned *tasks, unsigned *procs);
+
 // Visit every live task (for diagnostics).
 void task_for_each(void (*fn)(const task_t *t, void *ctx), void *ctx);
 

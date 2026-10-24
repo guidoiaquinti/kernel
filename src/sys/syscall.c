@@ -1,4 +1,6 @@
 #include "sys/syscall.h"
+#include "arch/percpu.h"
+#include "arch/systick.h"
 #include "arch/trapframe.h"
 #include "common.h"
 #include "fs/fat32.h"
@@ -45,6 +47,23 @@ struct kassign_info {
 
 _Static_assert(sizeof(struct kvolume_info) == 24, "volume info ABI");
 _Static_assert(sizeof(struct kassign_info) == 4164, "assign info ABI");
+
+// Kernel-side mirror of the userland struct sysinfo (user/libk/koraos.h).
+struct ksysinfo {
+    uint32_t cpus;
+    uint32_t cpus_max;
+    uint32_t tick_hz;
+    uint32_t page_size;
+    uint32_t tasks;
+    uint32_t tasks_max;
+    uint32_t procs;
+    uint32_t procs_max;
+    uint64_t pages_total;
+    uint64_t pages_free;
+    uint64_t ticks;
+};
+
+_Static_assert(sizeof(struct ksysinfo) == 56, "sysinfo ABI");
 
 // Kernel-side mirror of the userland struct fb_info (user/libk/koraos.h). The
 // layout must match exactly: the syscall fills this through a user pointer.
@@ -464,6 +483,27 @@ static long sys_fb_info(struct fb_info *out) {
     return 0;
 }
 
+// sysinfo(out): cores online, the tick, memory and task counts.
+static long sys_sysinfo(struct ksysinfo *out) {
+    if (!uptr_ok((uint64_t)out, sizeof(*out))) {
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    for (unsigned i = 0; i < MAX_CPUS; i++) {
+        out->cpus += i == 0 || __atomic_load_n(&cpus[i].online, __ATOMIC_ACQUIRE);
+    }
+    out->cpus_max = MAX_CPUS;
+    out->tick_hz = systick_hz();
+    out->page_size = PAGE_SIZE;
+    task_counts(&out->tasks, &out->procs);
+    out->tasks_max = MAX_TASKS;
+    out->procs_max = MAX_PROCS;
+    out->pages_total = frame_alloc_total_count();
+    out->pages_free = frame_alloc_free_count();
+    out->ticks = systick_count();
+    return 0;
+}
+
 void syscall_handle(struct trapframe *tf) {
     uint64_t num = tf->regs[8];
     uint64_t a0 = tf->regs[0];
@@ -548,6 +588,9 @@ void syscall_handle(struct trapframe *tf) {
         break;
     case SYS_kill:
         ret = task_kill((int)a0);
+        break;
+    case SYS_sysinfo:
+        ret = sys_sysinfo((struct ksysinfo *)a0);
         break;
     case SYS_task_info:
         ret = uptr_ok(a1, sizeof(struct ktask_info))

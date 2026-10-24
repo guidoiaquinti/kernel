@@ -200,10 +200,20 @@ There is no page-table sharing to manage.
    style job API (`job_queue`, `job_result`), one thread per job. `ps` shows
    threads (TID). `threadprobe` smoke steps and a pthread-driven host test of
    the mutex, heap and jobs.
-7. **Userland and CI**: atomics in `libk`; demos for a job-parallel computation
-   showing the speedup and for a program driving several unbalanced, pinned
-   sub-processes; CI profiles on `virt -smp 4` and raspi3b (four cores),
-   repeated stress runs, host unit tests for run-queue and placement logic.
+7. **Userland and CI** (done): atomics in `libk` (`atomic_get`/`set`/`add`/
+   `swap`/`cas`, named clear of C11's), `sysinfo` (syscall 24: cores online,
+   tick, pages, task counts). `jobdemo` renders a fixed-point Mandelbrot as
+   one job, then one job per core, and reports the speedup; `pindemo` drives
+   unbalanced worker processes pinned by hand (a heavy one alone, light ones
+   sharing a core, all finishing together). The run queue's round robin and
+   the sleep rounding move into host-tested helpers next to `sched_place`.
+   The smoke test's `--stress N` repeats the thread, kill and demo steps; the
+   four-core virt profiles (GICv2/v3, EL1/EL2) and raspi3b run it in CI.
+
+Milestone 7 is complete. A known cost of deferring IPIs: a thread created
+for, or woken on, an idle core starts on that core's next tick, so short
+parallel jobs lose up to 10 ms at start and at join. A reschedule IPI would
+remove it if that ever matters.
 
 **Risk**: PR 4 on real Pi 4 hardware is the least predictable step; QEMU does
 not reproduce every hardware or memory-ordering behaviour.

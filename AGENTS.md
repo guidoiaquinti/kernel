@@ -4,7 +4,7 @@ Use this file when you drop into the workspace so you can ramp quickly and keep 
 
 ## Project Snapshot
 - **Target**: QEMU AArch64 virt (independent development target), plus Bare-metal Raspberry Pi kernel (Pi 3 via QEMU raspi3b, Pi 4 hardware)
-- **Current Capabilities**: EL0/FAT32 reads/writes and file tools, volume/assign paths, Pi USB keyboards; virt PL011/GICv2, ramfb, VirtIO storage/input and CI development profiles
+- **Current Capabilities**: EL0/FAT32 reads/writes and file tools, volume/assign paths, Pi USB keyboards, Pi 3 SD card; SMP threads and jobs; virt PL011/GICv2/v3, ramfb, VirtIO storage/input and CI development profiles
 - **Toolchain**: LLVM/Clang cross-compilation managed by CMake (`./build.sh`)
 
 ## Where To Look
@@ -24,8 +24,10 @@ Use this file when you drop into the workspace so you can ramp quickly and keep 
 - Use `build.sh --target qemu_virt` and `run-qemu.sh --target qemu_virt` for
   independent development; raspi3b is `qemu_raspi3b`. User programs/FS generation
   live in `cmake/userfs.cmake` and `cmake/userfs`; kernels consume shared userfs.
-- FAT32 writes are developed on disposable QEMU virt images only. Run
-  `tests/run-qemu-write.py` for EL0 writes plus fsck/mtools verification. The
+- FAT32 writes are developed on disposable QEMU images only: virt disks
+  (`tests/run-qemu-write.py`) and raspi3b SD scratch cards from a
+  `--sd-writable` build (`tests/run-qemu-sd-write.py`), both with fsck/mtools
+  verification. SD cards are read-only in normal builds. The
   shared `build/userfs/aarch64/koraos.img` is immutable; never attach it writable
   or test writes on a Pi firmware card. Mutating user tools must surface sync
   failures. The ramdisk remains read-only.

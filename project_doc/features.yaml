@@ -277,10 +277,11 @@ categories:
         prs: [50, 54, 55]
       - id: sd-card
         name: SD card
-        status: planned
+        status: in_progress
         description: Native SD card driver, so the boot card is a usable volume.
         platforms: [rpi3, rpi4]
         milestone: 10
+        prs: [63]
       - id: usb-mass-storage
         name: USB mass storage
         status: planned

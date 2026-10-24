@@ -1,4 +1,5 @@
 #include "drivers/mailbox.h"
+#include "mm/coherent.h"
 #include "peripherals/mailbox.h"
 
 static inline uint32_t arm_to_bus(uintptr_t addr) {
@@ -47,4 +48,27 @@ int mailbox_call(uint8_t channel, volatile uint32_t *buffer) {
     }
 
     return 0;
+}
+
+#define TAG_GET_CLOCK_RATE 0x00030002
+#define MAILBOX_REQUEST 0
+#define MAILBOX_RESPONSE_OK 0x80000000u
+
+uint32_t mailbox_clock_rate(uint32_t id) {
+    volatile uint32_t *msg = coherent_page(COHERENT_SLOT_KORA_PROPERTY);
+    unsigned i = 0;
+    msg[i++] = 0;  // total size, below
+    msg[i++] = MAILBOX_REQUEST;
+    msg[i++] = TAG_GET_CLOCK_RATE;
+    msg[i++] = 8;  // value buffer: clock id, rate
+    msg[i++] = 0;
+    msg[i++] = id;
+    msg[i++] = 0;
+    msg[i++] = 0;  // end tag
+    msg[0] = i * 4;
+    if (!mailbox_call(MAILBOX_CHANNEL_PROPERTY, msg) || msg[1] != MAILBOX_RESPONSE_OK ||
+        msg[5] != id) {
+        return 0;
+    }
+    return msg[6];
 }

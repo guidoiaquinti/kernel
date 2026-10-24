@@ -14,6 +14,8 @@
 // reserves slots 0..67 and 128..1023 (circle/memory.h COHERENT_SLOT_*; 256..1023
 // are the xHCI's on the Pi 4); 68..127 are free.
 #define COHERENT_SLOT_KORA_MAILBOX 127
+// Slot for small property queries after boot (drivers/mailbox.c).
+#define COHERENT_SLOT_KORA_PROPERTY 126
 
 #ifdef __cplusplus
 extern "C" {

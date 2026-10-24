@@ -212,11 +212,38 @@ mutating tools sync before reporting success. Use the shell's `sync` command
 to flush changes made by other programs. Names use UTF-8, while interactive
 console input currently accepts ASCII; quotes handle spaces in ASCII paths.
 
+### SD card (Pi 3, QEMU raspi3b)
+
+The Pi 3 kernels read the SD card through the Arasan SDHCI controller: the
+card's FAT32 partitions show up in `volumes` next to the ramdisk, which stays
+the boot volume. On hardware that is the boot card, so its `KORAOS` partition
+becomes browsable. The card is **read-only** unless the kernel is built with
+`--sd-writable`; keep it that way for a card with Pi firmware on it.
+
+In QEMU, `tests/create-sd-card-image.py` makes a disposable card (64 MiB is
+presented as a standard-capacity card, 4096 MiB as SDHC) and the smoke test
+attaches it with `--sd`, read-only through a QEMU snapshot:
+
+```bash
+tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib 4096
+tests/run-qemu-smoke.py --target qemu_raspi3b --sd build/sd-card.img
+```
+
+For writes, build a separate `--sd-writable` kernel and let the wrapper check
+the card with `fsck.fat` and mtools after QEMU exits:
+
+```bash
+./build.sh --target qemu_raspi3b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
+tests/run-qemu-sd-write.py
+```
+
 CI builds shared userfs once and passes its artifact to kernel jobs. It builds
 all four targets, both hardware release targets, a complete SD payload, and
 retains host sanitizer/CLI tests and raspi3b smoke. Independent virt profiles
 cover embedded graphics, external disk/keyboard at 128 MiB, serial-only 64 MiB,
-EL2 entry, writable scratch-root integrity, and repeated EL0 page/malloc allocation and nested-process lifetime. Logs and
+EL2 entry, writable scratch-root integrity, and repeated EL0 page/malloc allocation and nested-process lifetime. A raspi3b
+SD job reads standard and high-capacity scratch cards and writes one with a
+`--sd-writable` kernel. Logs and
 screenshots are retained on failure. QEMU does not validate real Pi USB, HDMI,
 cache behavior or firmware. The current virt profile has no SMP, GICv3, PCI,
 networking, audio or VirtIO GPU; scheduling remains cooperative.

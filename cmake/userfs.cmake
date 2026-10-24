@@ -49,6 +49,7 @@ function(koraos_add_userfs SOURCE_ROOT IMAGE_PATH)
     koraos_add_user_program(schedprobe "${SOURCE_ROOT}/tests/user/schedprobe.c")
     koraos_add_user_program(forbidprobe "${SOURCE_ROOT}/tests/user/forbidprobe.c")
     koraos_add_user_program(threadprobe "${SOURCE_ROOT}/tests/user/threadprobe.c")
+    koraos_add_user_program(sumprobe "${SOURCE_ROOT}/tests/user/sumprobe.c")
     koraos_add_user_program(nsprobe "${SOURCE_ROOT}/tests/user/nsprobe.c")
     koraos_add_user_program(writeprobe "${SOURCE_ROOT}/tests/user/writeprobe.c")
 

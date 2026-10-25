@@ -167,3 +167,51 @@ jobs:
           name: virt-${{ matrix.profile }}
           path: build/debug/qemu_virt/qemu-*/
           if-no-files-found: ignore
+
+  sd-tests:
+    name: QEMU raspi3b SD card (${{ matrix.profile }})
+    needs: userfs
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: sdsc-read-only
+            size: 64
+          - profile: sdhc-read-only
+            size: 4096
+          - profile: sdhc-writable
+            size: 4096
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: userfs-aarch64
+          path: build/userfs/aarch64
+      - name: Install kernel toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake mtools dosfstools qemu-system-arm
+      - name: Build raspi3b with prepared userfs
+        if: matrix.profile != 'sdhc-writable'
+        run: ./build.sh --target qemu_raspi3b --userfs-dir build/userfs/aarch64
+      - name: Read a scratch card
+        if: matrix.profile != 'sdhc-writable'
+        run: |
+          tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib ${{ matrix.size }}
+          tests/run-qemu-smoke.py --target qemu_raspi3b --sd build/sd-card.img --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
+      - name: Build raspi3b with SD writes enabled
+        if: matrix.profile == 'sdhc-writable'
+        run: ./build.sh --target qemu_raspi3b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
+      - name: Write a scratch card and verify it on the host
+        if: matrix.profile == 'sdhc-writable'
+        run: tests/run-qemu-sd-write.py --size-mib ${{ matrix.size }} --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
+      - name: Upload SD serial logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sd-${{ matrix.profile }}
+          path: |
+            build/debug/qemu_raspi3b/qemu-*/*.log
+            build/debug/qemu_raspi3b/qemu-*/*.png
+          if-no-files-found: ignore

@@ -273,8 +273,14 @@ against scratch images. Never against a card that holds firmware until proven.
 
 ## Milestone 10 – Storage drivers
 
-1. **SD on Pi 3** (Arasan SDHCI) under the `blkdev_t` seam; evaluate reusing
-   Circle's SD driver against writing one (license compatibility checked).
+1. **SD on Pi 3** (done): our own polled SDHCI driver for the Arasan
+   controller (`src/drivers/sdhci.c`) under the `blkdev_t` seam, rather than
+   Circle's: Circle code stays on core 0, while ours runs in any task under the
+   BKL, and its SDHCI core carries over to EMMC2. GPIO 48-53 move from SDHOST
+   to the Arasan controller; SDSC and SDHC/SDXC cards, 4-bit bus at 25 MHz,
+   multi-block reads and writes. Writes only with `--sd-writable`. QEMU raspi3b
+   tests read a standard and a high-capacity scratch card and write one,
+   checked with fsck and mtools on the host.
 2. **SD on Pi 4** (EMMC2).
 3. **USB mass storage** through Circle's existing mass storage class driver.
 

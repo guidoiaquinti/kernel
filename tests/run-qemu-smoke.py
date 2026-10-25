@@ -14,6 +14,7 @@ screenshot per screen check.
 """
 
 import argparse
+import importlib.util
 import os
 import re
 import select
@@ -214,14 +215,74 @@ def core_of(q, name):
     raise Failure("ps does not list %s" % name)
 
 
+def sd_fixture():
+    """tests/create-sd-card-image.py, for the expected card contents."""
+    spec = importlib.util.spec_from_file_location("sd_card", os.path.join(ROOT, "tests/create-sd-card-image.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1,
-        stress=0):
+        stress=0, sd_card=False, sd_write=False):
     """Yield (name, check) steps; each check raises Failure on error."""
 
     def boot():
         q.expect(rb"KoraOS shell\. Type 'help'\.", timeout=90)
         q.expect(PROMPT)
     yield "boots to the shell", boot
+
+    if sd_card:
+        card = sd_fixture()
+        big = card.big_content()
+        sums = {"README.TXT": (len(card.MARKER), card.fnv1a64(card.MARKER.encode())),
+                "BIG.BIN": (len(big), card.fnv1a64(big))}
+        device = []
+
+        def check_sums(names):
+            """sumprobe each card file in `names` (path: expected file name)."""
+            q.send("sumprobe %s\r" % " ".join("%s:/%s" % (device[0], path) for path in names))
+            for path, expected in names.items():
+                m = q.expect(rb"^sumprobe: \S+ (?:(\d+) ([0-9a-f]{16})|unreadable)\r?\n")
+                if m.group(1) is None:
+                    raise Failure("cannot read %s:/%s from the SD card" % (device[0], path))
+                got = (int(m.group(1)), int(m.group(2), 16))
+                if got != sums[expected]:
+                    raise Failure("%s:/%s from the SD card: size/checksum %s, want %s"
+                                  % (device[0], path, got, sums[expected]))
+            q.expect(rb"\] exited with 0")
+            q.expect(PROMPT)
+
+        def sd_volume():
+            q.send("volumes\r")
+            m = q.expect(rb"^(df\d+): sdcard( \[read-only\])?\r?\n")
+            q.expect(PROMPT)
+            device.append(m.group(1).decode())
+            if (m.group(2) is None) != sd_write:
+                raise Failure("SD volume is %s" % ("writable" if m.group(2) is None else "read-only"))
+            # Multi-block reads of an odd-sized file, compared with the host's bytes.
+            check_sums({"README.TXT": "README.TXT", "BIG.BIN": "BIG.BIN"})
+            # A program loaded straight off the card.
+            q.send("%s:/bin/hello\r" % device[0])
+            q.expect(rb"^Hello from userland \(ELF\)")
+            q.expect(PROMPT)
+        yield "SD card: its FAT32 volume, multi-block reads and a program from it", sd_volume
+
+        def sd_writes():
+            if not sd_write:
+                q.send("mkdir %s:/NOPE\r" % device[0])
+                q.expect(rb"mkdir: cannot create")
+                q.expect(PROMPT)
+                return
+            for command in ("cp %s:/BIG.BIN %s:/COPY.BIN", "mkdir %s:/NEWDIR",
+                            "cp %s:/README.TXT %s:/NEWDIR/NOTE.TXT", "sync"):
+                q.send((command % ((device[0],) * command.count("%s"))) + "\r")
+                if command != "sync":
+                    q.expect(rb"\] exited with 0")
+                q.expect(PROMPT)
+            check_sums({"COPY.BIN": "BIG.BIN", "NEWDIR/NOTE.TXT": "README.TXT"})
+        yield ("SD card: writes, verified on the host afterwards" if sd_write else
+               "SD card: read-only unless built --sd-writable"), sd_writes
 
     def ls():
         q.send("ls /bin\r")
@@ -930,6 +991,9 @@ def main():
     parser.add_argument("--write-test", action="store_true", help="mutate a disposable writable FAT32 root")
     parser.add_argument("--disk-writable", action="store_true", help="enable raw writes to the supplied test disk")
     parser.add_argument("--no-graphics", action="store_true")
+    parser.add_argument("--sd", help="raspi3b: SD card image (tests/create-sd-card-image.py)")
+    parser.add_argument("--sd-writable", action="store_true",
+                        help="attach the card writable; the kernel must be built --sd-writable")
     parser.add_argument("--kernel")
     parser.add_argument("--qemu", default="qemu-system-aarch64")
     parser.add_argument("--out")
@@ -966,6 +1030,14 @@ def main():
     os.makedirs(args.out, exist_ok=True)
 
     extra = ["-device", "ramfb"] if args.machine == "virt" and not args.no_graphics else []
+    if args.sd:
+        if args.machine != "raspi3b" or not os.path.isfile(args.sd):
+            parser.error("--sd requires raspi3b and an existing card image")
+        # Read-only runs never touch the image (QEMU's SD card cannot be read-only).
+        extra += ["-drive", "if=sd,format=raw,file=%s%s" % (os.path.abspath(args.sd),
+                                                          "" if args.sd_writable else ",snapshot=on")]
+    elif args.sd_writable:
+        parser.error("--sd-writable requires --sd")
     if args.keyboard:
         if args.machine != "virt":
             parser.error("--keyboard requires virt")
@@ -1010,6 +1082,18 @@ def main():
             sys.exit(1)  # QEMU is still stopped by the finally below
         if args.disk:
             q.expect(rb"\[blkdev\] using VirtIO disk")
+        if args.machine == "raspi3b":
+            # The SD slot: a card announces itself, an empty slot says so.
+            m = q.expect(rb"^\[sd\] (no card|(SDSC|SDHC/SDXC) card, (\d+) MB, (read-only|writable))")
+            if args.sd is None and m.group(1) != b"no card":
+                raise Failure("an SD card showed up without one attached: %s" % m.group(1).decode())
+            if args.sd is not None:
+                mb = os.path.getsize(args.sd) // (1024 * 1024)
+                want = (b"SDHC/SDXC" if mb > 2048 else b"SDSC", str(mb).encode(),
+                        b"writable" if args.sd_writable else b"read-only")
+                if (m.group(2), m.group(3), m.group(4)) != want:
+                    raise Failure("SD card line %r, want %s" % (m.group(1), want))
+            print("ok   - SD slot: %s" % m.group(1).decode())
         if args.expect_root_failure:
             q.expect(rb"fat32: mount failed:")
             q.expect(rb"kernel: failed to load /bin/init")
@@ -1018,7 +1102,8 @@ def main():
         if args.keyboard:
             q.expect(rb"\[virtio-input\] keyboard ready")
         for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume,
-                               args.write_test, cores, args.stress):
+                               args.write_test, cores, args.stress, args.sd is not None,
+                               args.sd_writable):
             try:
                 check()
                 print("ok   - " + name)

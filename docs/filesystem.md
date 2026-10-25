@@ -10,7 +10,17 @@ independent binaries read from the filesystem, not embedded in the kernel image.
 Pi hardware and raspi3b use a **ramdisk**: a FAT32 image built on the host and
 embedded in the kernel. QEMU virt can instead mount one attached VirtIO MMIO
 block disk. Both backends register together; FAT32 mounts every valid partition and uses
-the preferred boot partition as the initial working volume. No SD/eMMC driver exists yet.
+the preferred boot partition as the initial working volume.
+
+On the Pi 3 (and QEMU raspi3b) the **SD card** registers too, through
+[`src/drivers/sdhci.c`](../src/drivers/sdhci.c): a polled driver for the
+Arasan SDHCI controller, which takes over the card's pins from the firmware's
+SDHOST controller. Standard and high-capacity cards work, on a 4-bit bus at
+25 MHz, with multi-block transfers. The card's FAT32 partitions become volumes
+next to the ramdisk, which stays the boot volume. The card is read-only unless
+the kernel is built with `--sd-writable`. Transfers run in the calling task
+under the BKL with interrupts masked, a few hundred microseconds per cluster.
+The Pi 4's EMMC2 controller follows (milestone 10, step 2).
 
 ```
 create-fs-image.sh  ──(mtools)──▶  build/userfs/aarch64/koraos.img  ──(.incbin)──▶  kernel image
@@ -53,8 +63,8 @@ Each layer has a clean seam:
 - **Block device** ([`include/fs/blkdev.h`](../include/fs/blkdev.h)), a
   `blkdev_t` with read/write/flush operations over 512-byte sectors. A registry
   holds up to eight physical backends and four FAT32 primary partitions per
-  backend. Ramdisk and VirtIO register with an explicit backend type; future
-  SD/eMMC and USB backends use the same registration API. Each partition exposes
+  backend. Ramdisk, VirtIO and SD register with an explicit backend type; USB
+  mass storage will use the same registration API. Each partition exposes
   a bounded `blkdev_t` view whose LBA zero is its first sector. Bounds checks
   happen before transport I/O, so reads and writes cannot cross a partition.
 - **FAT32** ([`include/fs/fat32.h`](../include/fs/fat32.h)), per-volume state

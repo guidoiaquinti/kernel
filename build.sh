@@ -12,6 +12,7 @@ Usage: ./build.sh [options] [clean]
   --userfs-only       Build only the shared AArch64 user programs/FAT image
   --userfs-dir DIR    Consume DIR/koraos.img without rebuilding userfs
   --install-to DIR    Install selected hardware targets after all builds pass
+  --sd-writable       Let the kernel write to the SD card (default: read-only)
   --clean             Clean selected configuration/targets and owned userfs first
   clean               Clean those outputs and exit
   --help              Show this help
@@ -26,6 +27,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 original_args=("$@")
 build_root="${BUILD_DIR:-$script_dir/build}"
 build_type="${BUILD_TYPE:-Debug}"
+sd_writable=OFF
 userfs_override=""
 install_dir=""
 userfs_only=0
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --build-dir) require_value "$@"; build_root="$2"; shift 2 ;;
         --userfs-dir) require_value "$@"; userfs_override="$2"; shift 2 ;;
         --install-to) require_value "$@"; install_dir="$2"; shift 2 ;;
+        --sd-writable) sd_writable=ON; shift ;;
         --userfs-only) userfs_only=1; shift ;;
         --clean) clean_first=1; shift ;;
         clean) clean_only=1; shift ;;
@@ -164,7 +167,8 @@ copied_commands=0
 for target in "${targets[@]}"; do
     target_dir="$build_root/$configuration/$target"
     configure_args=(-S "$script_dir" -B "$target_dir" -G "Unix Makefiles"
-        "-DCMAKE_BUILD_TYPE=$build_type" "-DKORAOS_TARGET=$target" "-DKORAOS_USERFS_DIR=$userfs_dir")
+        "-DCMAKE_BUILD_TYPE=$build_type" "-DKORAOS_TARGET=$target" "-DKORAOS_USERFS_DIR=$userfs_dir"
+        "-DKORAOS_SD_WRITABLE=$sd_writable")
     if [[ -n "$install_dir" && "$target" == hw_* ]]; then configure_args+=("-DBOOTMNT=$install_dir"); fi
     cmake "${configure_args[@]}"
     cmake --build "$target_dir" --parallel "$jobs"

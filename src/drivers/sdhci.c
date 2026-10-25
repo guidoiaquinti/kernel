@@ -2,6 +2,10 @@
 //
 // SD card through the SDHCI controller, polled. See drivers/sdhci.h.
 //
+// The Pi 3's card slot sits on the Arasan controller (once its pins are moved
+// over from SDHOST); the Pi 4's on EMMC2, a standard SDHCI 3.0 controller
+// wired to the slot, with its own clock. Both speak the same registers.
+//
 // The BCM2835 Arasan controller accepts only 32-bit register accesses, so the
 // 16-bit SDHCI registers are written in their 32-bit pairs (block size with
 // block count, transfer mode with command), and it needs two card clock cycles
@@ -24,7 +28,13 @@
 #include "lib/timer.h"
 #include "peripherals/base.h"
 
-#define SDHCI_BASE (PBASE + 0x00300000)
+#if RPI_VERSION == 4
+#define SDHCI_BASE (PBASE + 0x00340000)  // EMMC2
+#define SDHCI_CLOCK MAILBOX_CLOCK_EMMC2
+#else
+#define SDHCI_BASE (PBASE + 0x00300000)  // Arasan "EMMC"
+#define SDHCI_CLOCK MAILBOX_CLOCK_EMMC
+#endif
 
 // Registers (32-bit offsets).
 #define ARG2 0x00
@@ -289,11 +299,12 @@ static int sd_flush(blkdev_t *dev) {
 }
 #endif
 
-// Route GPIO 48-53 (the card slot) from SDHOST to the Arasan controller. On
-// the Pi 3 the controller can also reach the WiFi chip's SDIO on GPIO 34-39;
-// KoraOS has no WiFi driver, so those become plain inputs and the card has
-// the bus to itself.
+// Pi 3: route GPIO 48-53 (the card slot) from SDHOST to the Arasan
+// controller. It can also reach the WiFi chip's SDIO on GPIO 34-39; KoraOS has
+// no WiFi driver, so those become plain inputs and the card has the bus to
+// itself. The Pi 4's slot is wired to EMMC2: nothing to route.
 static void route_pins(void) {
+#if RPI_VERSION == 3
     for (uint8_t pin = 34; pin <= 39; pin++) {
         gpio_pin_set_func(pin, GFInput);
     }
@@ -301,6 +312,7 @@ static void route_pins(void) {
         gpio_pin_set_func(pin, GFAlt3);
         gpio_pin_set_pull(pin, pin == 48 ? GPNone : GPUp);  // CLK; CMD and DAT0-3
     }
+#endif
 }
 
 // Reset the controller and start the identification clock. False if the
@@ -322,9 +334,9 @@ static bool host_reset(void) {
 blkdev_t *sdhci_init(bool *present) {
     *present = false;
     card = (struct sd_card){0};
-    card.base_hz = mailbox_clock_rate(MAILBOX_CLOCK_EMMC);
+    card.base_hz = mailbox_clock_rate(SDHCI_CLOCK);
     if (card.base_hz == 0) {
-        printf("[sd] no EMMC clock rate from the firmware\n");
+        printf("[sd] no %s clock rate from the firmware\n", RPI_VERSION == 4 ? "EMMC2" : "EMMC");
         return NULL;
     }
     route_pins();

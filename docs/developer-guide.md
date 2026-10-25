@@ -212,9 +212,10 @@ mutating tools sync before reporting success. Use the shell's `sync` command
 to flush changes made by other programs. Names use UTF-8, while interactive
 console input currently accepts ASCII; quotes handle spaces in ASCII paths.
 
-### SD card (Pi 3, QEMU raspi3b)
+### SD card (Pi 3, Pi 4, QEMU raspi3b)
 
-The Pi 3 kernels read the SD card through the Arasan SDHCI controller: the
+The Pi kernels read the SD card through the SoC's SDHCI controller (the
+Arasan controller on the Pi 3, EMMC2 on the Pi 4): the
 card's FAT32 partitions show up in `volumes` next to the ramdisk, which stays
 the boot volume. On hardware that is the boot card, so its `KORAOS` partition
 becomes browsable. The card is **read-only** unless the kernel is built with

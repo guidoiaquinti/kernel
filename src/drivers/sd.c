@@ -48,6 +48,25 @@ uint32_t sdhci_clock_hz(uint32_t base_hz, unsigned divisor) {
     return divisor == 0 ? base_hz : base_hz / (2 * divisor);
 }
 
+uint32_t sd_base_clock(uint32_t firmware_hz, uint32_t measured_hz, uint32_t caps,
+                       enum sd_clock_source *source) {
+    uint32_t caps_mhz = (caps >> 8) & 0xffu;
+    if (firmware_hz != 0) {
+        *source = SD_CLOCK_FIRMWARE;
+        return firmware_hz;
+    }
+    if (measured_hz != 0) {
+        *source = SD_CLOCK_MEASURED;
+        return measured_hz;
+    }
+    if (caps_mhz != 0) {
+        *source = SD_CLOCK_CAPS;
+        return caps_mhz * 1000000u;
+    }
+    *source = SD_CLOCK_ASSUMED;
+    return SD_ASSUMED_BASE_HZ;
+}
+
 uint32_t sdhci_divisor_bits(unsigned divisor) {
     return ((divisor & 0xffu) << 8) | (((divisor >> 8) & 3u) << 6);
 }

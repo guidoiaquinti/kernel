@@ -49,6 +49,7 @@
 #define INTERRUPT 0x30
 #define IRPT_MASK 0x34
 #define IRPT_EN 0x38
+#define CAPABILITIES 0x40
 #define SLOTISR_VER 0xfc
 
 // STATUS (present state).
@@ -315,6 +316,30 @@ static void route_pins(void) {
 #endif
 }
 
+// The controller's base clock. The firmware normally says (its current rate);
+// if it does not, its measured rate, the controller's own claim or a
+// conservative guess will do, and the log tells which and why.
+static uint32_t base_clock(void) {
+    const char *name = RPI_VERSION == 4 ? "EMMC2" : "EMMC";
+    struct mailbox_clock_reply set, measured = {0};
+    uint32_t set_hz = mailbox_clock_query(MAILBOX_TAG_GET_CLOCK_RATE, SDHCI_CLOCK, &set);
+    uint32_t measured_hz = set_hz != 0 ? 0 : mailbox_clock_query(MAILBOX_TAG_GET_CLOCK_RATE_MEASURED,
+                                                                  SDHCI_CLOCK, &measured);
+    enum sd_clock_source source;
+    uint32_t hz = sd_base_clock(set_hz, measured_hz, rd(CAPABILITIES), &source);
+    if (source != SD_CLOCK_FIRMWARE) {
+        printf("[sd] firmware gave no %s clock rate (clock %u: delivered %d, response 0x%x, "
+               "tag 0x%x, id %u, rate %u)\n", name, (unsigned)SDHCI_CLOCK, set.delivered,
+               (unsigned)set.response, (unsigned)set.tag_flags, (unsigned)set.id,
+               (unsigned)set.rate);
+        static const char *const sources[] = {"firmware", "the firmware's measurement",
+                                              "the controller's capabilities", "an assumption"};
+        printf("[sd] using a %u MHz base clock from %s\n", (unsigned)(hz / 1000000),
+               sources[source]);
+    }
+    return hz;
+}
+
 // Reset the controller and start the identification clock. False if the
 // controller does not respond.
 static bool host_reset(void) {
@@ -334,11 +359,7 @@ static bool host_reset(void) {
 blkdev_t *sdhci_init(bool *present) {
     *present = false;
     card = (struct sd_card){0};
-    card.base_hz = mailbox_clock_rate(SDHCI_CLOCK);
-    if (card.base_hz == 0) {
-        printf("[sd] no %s clock rate from the firmware\n", RPI_VERSION == 4 ? "EMMC2" : "EMMC");
-        return NULL;
-    }
+    card.base_hz = base_clock();
     route_pins();
     if (!host_reset()) {
         printf("[sd] controller did not reset\n");

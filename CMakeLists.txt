@@ -239,8 +239,8 @@ function(add_kernel_variant VARIANT)
     if(KVAR_QEMU)
         target_compile_definitions(${target} PRIVATE QEMU_TESTING)
     endif()
-    # The SD card slot (Pi 3 for now): read-only unless built --sd-writable.
-    if(NOT KVAR_VIRT AND KVAR_BOARD STREQUAL "3")
+    # The SD card slot: read-only unless built --sd-writable.
+    if(NOT KVAR_VIRT)
         target_compile_definitions(${target} PRIVATE KORAOS_SD)
         if(KORAOS_SD_WRITABLE)
             target_compile_definitions(${target} PRIVATE KORAOS_SD_WRITABLE)

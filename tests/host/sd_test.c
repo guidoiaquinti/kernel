@@ -84,4 +84,18 @@ static void clock_divisor(void) {
     CHECK(sdhci_divisor_bits(1023) == 0xffc0, "N 1023 fills the field");
 }
 
-TEST_MAIN(csd_v1, csd_v2, clock_divisor)
+static void base_clock(void) {
+    enum sd_clock_source source;
+    uint32_t caps = 0x52134b4;  // QEMU's capabilities register: 52 MHz in bits 15:8
+    CHECK(sd_base_clock(200000000, 0, caps, &source) == 200000000 && source == SD_CLOCK_FIRMWARE,
+          "the firmware's rate comes first");
+    CHECK(sd_base_clock(0, 199999000, caps, &source) == 199999000 && source == SD_CLOCK_MEASURED,
+          "then its measurement");
+    CHECK(sd_base_clock(0, 0, caps, &source) == 52000000 && source == SD_CLOCK_CAPS,
+          "then the controller's capabilities");
+    CHECK(sd_base_clock(0, 0, 0xffff00ffu, &source) == SD_ASSUMED_BASE_HZ &&
+              source == SD_CLOCK_ASSUMED,
+          "a zero capabilities field means unknown");
+}
+
+TEST_MAIN(csd_v1, csd_v2, clock_divisor, base_clock)

@@ -12,15 +12,15 @@ embedded in the kernel. QEMU virt can instead mount one attached VirtIO MMIO
 block disk. Both backends register together; FAT32 mounts every valid partition and uses
 the preferred boot partition as the initial working volume.
 
-On the Pi 3 (and QEMU raspi3b) the **SD card** registers too, through
-[`src/drivers/sdhci.c`](../src/drivers/sdhci.c): a polled driver for the
-Arasan SDHCI controller, which takes over the card's pins from the firmware's
-SDHOST controller. Standard and high-capacity cards work, on a 4-bit bus at
+On the Pi 3 and Pi 4 (and QEMU raspi3b) the **SD card** registers too, through
+[`src/drivers/sdhci.c`](../src/drivers/sdhci.c): a polled SDHCI driver. On the
+Pi 3 it drives the Arasan controller, which takes over the card's pins from
+the firmware's SDHOST controller; on the Pi 4 it drives EMMC2, which the slot
+is wired to. Standard and high-capacity cards work, on a 4-bit bus at
 25 MHz, with multi-block transfers. The card's FAT32 partitions become volumes
 next to the ramdisk, which stays the boot volume. The card is read-only unless
 the kernel is built with `--sd-writable`. Transfers run in the calling task
 under the BKL with interrupts masked, a few hundred microseconds per cluster.
-The Pi 4's EMMC2 controller follows (milestone 10, step 2).
 
 ```
 create-fs-image.sh  ──(mtools)──▶  build/userfs/aarch64/koraos.img  ──(.incbin)──▶  kernel image

@@ -50,25 +50,31 @@ int mailbox_call(uint8_t channel, volatile uint32_t *buffer) {
     return 0;
 }
 
-#define TAG_GET_CLOCK_RATE 0x00030002
 #define MAILBOX_REQUEST 0
 #define MAILBOX_RESPONSE_OK 0x80000000u
 
-uint32_t mailbox_clock_rate(uint32_t id) {
+uint32_t mailbox_clock_query(uint32_t tag, uint32_t id, struct mailbox_clock_reply *reply) {
     volatile uint32_t *msg = coherent_page(COHERENT_SLOT_KORA_PROPERTY);
     unsigned i = 0;
     msg[i++] = 0;  // total size, below
     msg[i++] = MAILBOX_REQUEST;
-    msg[i++] = TAG_GET_CLOCK_RATE;
+    msg[i++] = tag;
     msg[i++] = 8;  // value buffer: clock id, rate
     msg[i++] = 0;
     msg[i++] = id;
     msg[i++] = 0;
     msg[i++] = 0;  // end tag
     msg[0] = i * 4;
-    if (!mailbox_call(MAILBOX_CHANNEL_PROPERTY, msg) || msg[1] != MAILBOX_RESPONSE_OK ||
-        msg[5] != id) {
-        return 0;
+    struct mailbox_clock_reply r = {0};
+    r.delivered = mailbox_call(MAILBOX_CHANNEL_PROPERTY, msg) != 0;
+    r.response = msg[1];
+    r.tag_flags = msg[4];
+    r.id = msg[5];
+    r.rate = msg[6];
+    if (reply != NULL) {
+        *reply = r;
     }
-    return msg[6];
+    bool ok = r.delivered && r.response == MAILBOX_RESPONSE_OK && (r.tag_flags & 0x80000000u) &&
+              r.id == id;
+    return ok ? r.rate : 0;
 }

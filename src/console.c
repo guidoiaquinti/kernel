@@ -116,7 +116,8 @@ static void print_task(const task_t *t, void *ctx) {
   const struct process *p = t->proc;
   printf("  %3d  %3d  %3u  %s  %5u  %s%s%s\n", t->pid, p != NULL ? p->pid : 0, t->core,
          states[t->state], (unsigned)task_kstack_peak(t), t->name,
-         t->forbid ? " (forbid)" : "", t->killed ? " (killed)" : "");
+         t->forbid ? " (forbid)" : "",
+         t->killed && t->state != TASK_EXITED ? " (killed)" : "");
 }
 
 // Every task (thread) with its process, state and kernel stack high-water mark
@@ -193,11 +194,19 @@ static char line[CONSOLE_MAX_CMD_LEN];
 static int line_len;
 static bool last_was_cr;
 
+// The prompt and the echo go out through uart_puts, in whole pieces under
+// the serial output lock, so other cores' lines never split them.
 void console_prompt(void) {
-  uart_puts("koraos> ");
-  for (int i = 0; i < line_len; i++) {
-    uart_putc(line[i]);
+  char prompt[sizeof("koraos> ") + CONSOLE_MAX_CMD_LEN];
+  int n = 0;
+  for (const char *p = "koraos> "; *p; p++) {
+    prompt[n++] = *p;
   }
+  for (int i = 0; i < line_len; i++) {
+    prompt[n++] = line[i];
+  }
+  prompt[n] = '\0';
+  uart_puts(prompt);
 }
 
 void console_input(char c) {
@@ -228,7 +237,8 @@ void console_input(char c) {
   }
   if (c >= 32 && c < 127 && line_len < CONSOLE_MAX_CMD_LEN - 1) {
     line[line_len++] = c;
-    uart_putc(c);
+    char echo[2] = {c, '\0'};
+    uart_puts(echo);
   }
 }
 

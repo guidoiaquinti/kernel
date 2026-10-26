@@ -672,6 +672,38 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
             raise Failure("the BKL is still held (by pid %s) with the system idle" % holder)
     yield "forbid()/permit(): nesting, no preemption, BKL held across EL0", forbid_permit
 
+    def serial_lines_whole():
+        # Threads on every core print a line per tick while the debug console
+        # prints tables on core 0: whole writes to the serial line are atomic,
+        # so no line may come out split by another core's output.
+        start = os.path.getsize(q.log.name)
+        q.send("threadprobe chatter 3000 &\r")
+        q.expect(rb"threadprobe: chatter \d+ line \d+ end")
+        for _ in range(6):
+            read_tasks_bkl()
+        q.expect(rb"threadprobe: chatter done", timeout=60)
+        for _ in range(50):  # reap it, so later steps see a quiet system
+            q.send("\r")
+            m = q.expect(rb"^(?:\[\d+\] done, exit (\d+)\r?\n)?\$ ")
+            if m.group(1) is not None:
+                break
+            time.sleep(0.1)
+        with open(q.log.name, "rb") as log:
+            log.seek(start)
+            text = log.read()
+        # A prompt prints no newline, so a whole line may follow one.
+        prompts = rb"^(?:\$ |koraos> )*"
+        chatter = re.compile(prompts + rb"threadprobe: chatter (?:\d+ line \d+ end|done)\r?$")
+        console = re.compile(prompts + rb"(?:big kernel lock: (?:free|pid \d+)|"
+                             rb"kernel stack peak: \d+ of \d+ bytes)\r?$")
+        lines = text.split(b"\n")
+        broken = [line for line in lines
+                  if (b"threadprobe: chatter" in line and not chatter.match(line)) or
+                  ((b"big kernel lock" in line or b"kernel stack peak" in line) and not console.match(line))]
+        if broken or sum(1 for line in lines if chatter.match(line)) < 20:
+            raise Failure("serial lines split by another core's output: %r" % broken[:5])
+    yield "serial output from several cores stays whole, line by line", serial_lines_whole
+
     def reap(count):
         """Wait until the shell has reaped every finished schedprobe job (each
         prompt reports and reaps finished jobs; `ps` shows any left, zombies

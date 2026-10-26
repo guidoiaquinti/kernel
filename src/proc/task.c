@@ -10,7 +10,7 @@
 //     BKL-protected; so are thread creation, exit and kill, which is why a
 //     dying thread takes the BKL first.
 //   * sched_lock (IRQ-safe) protects task states and the scheduling fields
-//     (blocked_on, wait queues, wake_tick), because interrupt handlers, which
+//     (blocked_on, wait queues, wake_us), because interrupt handlers, which
 //     never take the BKL, wake tasks and run the tick. It is held across the
 //     context switch and released by the task switched to.
 //   * Order: BKL, then a subsystem lock (tty, heap, ...), then sched_lock.
@@ -32,6 +32,7 @@
 #include "proc/user_mem.h"
 #include "lib/printf.h"
 #include "lib/string.h"
+#include "lib/timer.h"
 
 #define KSTACK_SIZE (KSTACK_PAGES * PAGE_SIZE)
 #define KSTACK_FILL 0x6b6b6b6b6b6b6b6bull  // untouched kernel stack words
@@ -472,8 +473,7 @@ void wait_queue_wake_all(struct wait_queue *wq) {
 }
 
 void task_msleep(uint64_t ms) {
-    uint64_t ticks = sched_sleep_ticks(ms, systick_hz());
-    if (ticks == 0) {
+    if (ms == 0) {
         task_yield();
         return;
     }
@@ -481,21 +481,22 @@ void task_msleep(uint64_t ms) {
     if (!current->killed) {
         current->state = TASK_BLOCKED;
         current->blocked_on = BLOCK_SLEEP;
-        current->wake_tick = systick_count() + ticks;
+        current->wake_us = sched_wake_us(timer_us(), ms);
     }
     block_and_switch(flags);
 }
 
-static void tick_task(task_t *t, uint64_t now) {
-    if (t->state == TASK_BLOCKED && t->blocked_on == BLOCK_SLEEP && now >= t->wake_tick) {
+static void tick_task(task_t *t, uint64_t now_us) {
+    if (t->state == TASK_BLOCKED && t->blocked_on == BLOCK_SLEEP && now_us >= t->wake_us) {
         make_runnable(t);
     }
 }
 
-// Every core's own tick: wake this core's due sleepers and end the running
-// task's slice. `now` is the system (core 0) tick count.
-void sched_tick(uint64_t now) {
+// Every core's own tick: wake this core's due sleepers (by the timer, not the
+// tick count) and end the running task's slice.
+void sched_tick(void) {
     struct cpu *c = this_cpu();
+    uint64_t now = timer_us();
     spin_lock(&sched_lock);  // in the timer interrupt: IRQs masked
     if (c->id == 0) {
         tick_task(&boot_task, now);

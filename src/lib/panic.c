@@ -12,6 +12,7 @@
 #include "lib/printf.h"
 
 static struct spinlock printf_lock = SPINLOCK_INIT("printf");
+static bool printf_lock_ready;  // set by printf_lock_init
 
 // A panicking core prints without the lock: whoever holds it may never let go.
 static unsigned long printf_lock_take(void) {
@@ -31,6 +32,15 @@ static void printf_lock_drop(unsigned long flags) {
 
 void printf_lock_init(void) {
     tfp_set_output_lock(printf_lock_take, printf_lock_drop);
+    printf_lock_ready = true;
+}
+
+unsigned long serial_out_begin(void) {
+    return printf_lock_ready ? printf_lock_take() : irq_save();
+}
+
+void serial_out_end(unsigned long flags) {
+    printf_lock_drop(flags);  // releases the lock only if this core holds it
 }
 
 void panic_begin(void) {

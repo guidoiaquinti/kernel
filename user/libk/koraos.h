@@ -171,7 +171,7 @@ int spawn_flags(const char *name, int argc, char *const argv[], int flags);
 int waitpid(int pid, int *code, int flags);
 int getpid(void);  /* the program's pid, the same in all its threads */
 void yield(void);
-void msleep(unsigned long ms);  /* at least ms milliseconds, in 10 ms ticks */
+void msleep(unsigned long ms);  /* at least ms milliseconds (up to a 10 ms tick more) */
 
 /* forbid()/permit(), after AmigaOS's Forbid()/Permit(): forbid() takes the big
  * kernel lock and keeps it until the matching permit(), so no other core can

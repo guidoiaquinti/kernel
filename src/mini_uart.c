@@ -1,4 +1,5 @@
 #include "mini_uart.h"
+#include "lib/panic.h"
 #include "gpio.h"
 #include "peripherals/irq.h"
 #include "utils.h"
@@ -162,12 +163,15 @@ void uart_rx_irq_enable(irq_handler_t handler) {
 }
 #endif
 
-// Hardware-agnostic helper function
+// Hardware-agnostic helper function: the whole string in one piece, under
+// the serial output lock (other cores' lines never land in the middle).
 void uart_puts(const char *str) {
+    unsigned long flags = serial_out_begin();
     while (*str) {
         if (*str == '\n') {
             uart_putc('\r');
         }
         uart_putc(*str++);
     }
+    serial_out_end(flags);
 }

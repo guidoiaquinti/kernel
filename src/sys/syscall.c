@@ -129,7 +129,7 @@ static open_file_t *fd_lookup(int fd) {
 static long sys_write(int fd, const char *buf, uint64_t len) {
     if (fd == 1 || fd == 2) {
         if (!uptr_ok((uint64_t)buf, len)) return -1;
-        for (uint64_t i = 0; i < len; i++) tty_putc(buf[i]);
+        tty_write(buf, (size_t)len);
         tty_flush();
         return (long)len;
     }

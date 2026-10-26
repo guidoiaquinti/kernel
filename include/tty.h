@@ -26,6 +26,10 @@ void tty_poll_serial(void);
 // Write one character to the terminal. Screen output that scrolls is batched:
 // call tty_flush() when a burst of output is done.
 void tty_putc(char c);
+// Write `len` bytes the way tty_putc does each, with the serial copy (QEMU
+// builds, or no screen) going out in one piece under the serial output lock,
+// so other cores' lines never land in the middle of it.
+void tty_write(const char *buf, size_t len);
 void tty_flush(void);
 
 // Block until an input byte arrives from the keyboard or the UART (when routed

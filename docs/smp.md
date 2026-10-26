@@ -114,9 +114,10 @@ on short jobs (`jobdemo 64`).
 
 Every core runs its own 100 Hz tick on its own generic timer, a per-core
 source (a GIC PPI, banked per core, or the core's local timer routing on the Pi
-3), which drives that core's scheduling. Core 0's tick is also the system
-tick: the global tick count (and so `msleep` deadlines) and the Circle timer
-hook. The debug console's `cpus` command shows
+3), which drives that core's scheduling and wakes its sleepers, whose
+`msleep` deadlines are times on the generic timer (a tick that comes late
+cannot cut a sleep short). Core 0's tick is also the system tick: the global
+tick count and the Circle timer hook. The debug console's `cpus` command shows
 each core with its own tick count and what it runs.
 
 ## Trying it

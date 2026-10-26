@@ -130,8 +130,10 @@ kernel dispatches them in [`src/sys/syscall.c`](../src/sys/syscall.c).
   manages, the tick rate and ticks since boot, the page size and the page
   pool's total and free pages, and live tasks and programs (zombies included)
   with their limits.
-- **`msleep`**: blocks for at least `ms` milliseconds, in whole 10 ms ticks
-  (plus up to one tick); other tasks run meanwhile. `msleep(0)` yields.
+- **`msleep`**: blocks for at least `ms` milliseconds: its deadline is a time
+  on the generic timer, checked on every tick of the task's core, so it wakes
+  up to one 10 ms tick after that (never early, even if a tick interrupt was
+  late); other tasks run meanwhile. `msleep(0)` yields.
 - **`forbid`** / **`permit`**: after AmigaOS's `Forbid()`/`Permit()`. `forbid`
   keeps the big kernel lock across returns to EL0 until the matching `permit`,
   so no other core can be in the kernel meanwhile, and stops this task being

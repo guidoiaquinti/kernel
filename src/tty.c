@@ -7,6 +7,7 @@
 
 #include "arch/irq.h"
 #include "console.h"
+#include "lib/panic.h"
 #include "arch/spinlock.h"
 #include "mini_uart.h"
 #include "proc/task.h"
@@ -162,17 +163,29 @@ static void screen_out(char c) {
     screen_putc(c);
 }
 
-void tty_putc(char c) {
+void tty_write(const char *buf, size_t len) {
 #ifndef QEMU_TESTING
     if (screen_framebuffer() != NULL) {
-        screen_out(c);
+        for (size_t i = 0; i < len; i++) {
+            screen_out(buf[i]);
+        }
         return;
     }
 #else
-    screen_out(c);
-#endif
-    if (c == '\n') {
-        uart_putc('\r');
+    for (size_t i = 0; i < len; i++) {
+        screen_out(buf[i]);
     }
-    uart_putc((unsigned char)c);
+#endif
+    unsigned long flags = serial_out_begin();
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\n') {
+            uart_putc('\r');
+        }
+        uart_putc((unsigned char)buf[i]);
+    }
+    serial_out_end(flags);
+}
+
+void tty_putc(char c) {
+    tty_write(&c, 1);
 }

@@ -83,7 +83,10 @@ Take locks only in this order (a lock may be skipped, never taken backwards):
    held across a context switch and released by the task switched to
 6. `heap` (`src/mm/kmalloc.c`), then `frames` (`src/mm/frame_alloc.c`)
 7. `irq table` (`src/arch/irq.c`): handler registration against dispatch
-8. `printf` (`src/lib/panic.c`): whole `printf` calls; bypassed while panicking
+8. `printf` (`src/lib/panic.c`): whole writes to the serial line (`printf`
+   calls, `uart_puts`, the debug console's prompt and echo, and the screen
+   terminal's serial copy of each `write`), so lines from different cores
+   never mix mid-line; bypassed while panicking
 
 A task blocks by marking itself blocked under `sched` before it drops the BKL,
 and a wait queue sleeper is queued before it releases the condition's lock, so

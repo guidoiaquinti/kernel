@@ -13,3 +13,10 @@ void panic_begin(void);
 // Serialize whole printf calls across cores and interrupt handlers (IRQ-safe
 // lock, bypassed while panicking). Called once at boot.
 void printf_lock_init(void);
+
+// The same lock for other whole writes to the serial line (uart_puts, the
+// screen terminal's serial mirror), so lines from different cores never mix
+// mid-line. Masks IRQs; returns what serial_out_end needs. Before
+// printf_lock_init it only masks IRQs: early boot runs on one core.
+unsigned long serial_out_begin(void);
+void serial_out_end(unsigned long flags);

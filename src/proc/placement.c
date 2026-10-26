@@ -33,7 +33,10 @@ int sched_round_robin(int slots, int from, bool (*can_run)(int slot, void *ctx),
     return -1;
 }
 
-uint64_t sched_sleep_ticks(uint64_t ms, unsigned hz) {
-    uint64_t ticks = (ms * hz + 999) / 1000;
-    return ticks != 0 ? ticks + 1 : 0;
+uint64_t sched_wake_us(uint64_t now_us, uint64_t ms) {
+    uint64_t limit = ~(uint64_t)0;
+    if (ms > (limit - now_us) / 1000) {
+        return limit;
+    }
+    return now_us + ms * 1000;
 }

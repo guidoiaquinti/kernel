@@ -43,7 +43,7 @@ static void systick_isr(void *ctx) {
     if (c->id == 0) {
         g_ticks++;
     }
-    sched_tick(g_ticks);  // every core schedules its own tasks
+    sched_tick();  // every core schedules its own tasks
     if (c->id == 0 && g_tick_hook != NULL) {
         g_tick_hook();  // Circle's timers: core 0 only
     }

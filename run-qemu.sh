@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
     cat <<'USAGE'
 Usage: ./run-qemu.sh [options] [-- QEMU arguments...]
-  --target NAME       qemu_raspi3b (default) or qemu_virt
+  --target NAME       qemu_raspi3b (default), qemu_raspi4b or qemu_virt
   --debug | --release Select matching build configuration (default: Debug)
   --build-dir DIR     Build root, as in build.sh (default: build beside script)
   --smp N             virt: cores to emulate, 1 to 4 (default 1, or KORA_QEMU_SMP);
-                      raspi3b always has 4
+                      raspi3b and raspi4b always have 4
   --gic 2|3           virt: interrupt controller version (default 2)
   --accel hvf         virt on an Apple Silicon Mac: run on the host's own cores
                       (Hypervisor.framework, -cpu host, GICv3) instead of TCG
@@ -16,6 +16,9 @@ Usage: ./run-qemu.sh [options] [-- QEMU arguments...]
 Environment: KORA_QEMU_TARGET, KORA_QEMU_SMP, KORA_QEMU_RAM, KORA_QEMU_RAMFB,
  KORA_QEMU_KEYBOARD, KORA_QEMU_DISK, KORA_QEMU_DISK_READONLY,
  KORA_QEMU_FB and KORA_QEMU_DISPLAY retain their existing meanings.
+ KORA_QEMU_SD=IMAGE puts an SD card in a raspi machine's slot (a QEMU
+ snapshot: the image is never changed unless KORA_QEMU_SD_WRITABLE=1; the
+ kernel only writes to it when built --sd-writable).
 Unrecognized arguments are passed to QEMU unchanged.
 USAGE
 }
@@ -51,7 +54,7 @@ case "$target" in
         target="qemu_$target" ;;
 esac
 case "$build_type" in Debug|debug) configuration=debug ;; Release|release) configuration=release ;; *) fail "BUILD_TYPE must be Debug or Release" ;; esac
-case "$target" in qemu_raspi3b|qemu_virt) ;; *) fail "Unsupported QEMU target: $target" ;; esac
+case "$target" in qemu_raspi3b|qemu_raspi4b|qemu_virt) ;; *) fail "Unsupported QEMU target: $target" ;; esac
 [[ "$smp" =~ ^[1-4]$ ]] || fail "--smp must be 1 to 4"
 case "$gic" in 2|3) ;; *) fail "--gic must be 2 or 3" ;; esac
 case "$accel" in tcg) cpu_args=(-cpu cortex-a72) ;; hvf) cpu_args=(-accel hvf -cpu host); gic=3 ;;
@@ -64,8 +67,21 @@ normalize_path() { python3 -c 'import os,sys; print(os.path.realpath(os.path.abs
 build_root=$(normalize_path "$build_root")
 kernel_img="$build_root/$configuration/$target/kernel.img"
 [[ -s "$kernel_img" && -f "$kernel_img" ]] || fail "Missing $kernel_img; build with --target $target first"
-if [[ "$target" == qemu_raspi3b ]]; then
-    machine_args=(-M raspi3b)
+if [[ "$target" == qemu_raspi* ]]; then
+    machine_args=(-M "${target#qemu_}")
+    if [[ -n "${KORA_QEMU_SD:-}" ]]; then
+        card=$(normalize_path "$KORA_QEMU_SD")
+        [[ -f "$card" ]] || fail "Missing SD card image: $card"
+        card_option="format=raw,file=${card//,/,,}"
+        [[ "${KORA_QEMU_SD_WRITABLE:-0}" == 1 ]] || card_option+=",snapshot=on"
+        if [[ "$target" == qemu_raspi3b ]]; then
+            machine_args+=(-drive "if=sd,$card_option")
+        else
+            # The Pi 4's slot is EMMC2; QEMU's if=sd would use the Arasan controller.
+            machine_args+=(-drive "if=none,id=sdcard,$card_option"
+                -device sd-card,drive=sdcard,bus=main-system-bus/generic-sdhci/sd-bus)
+        fi
+    fi
 else
     machine_args=(-M "virt,gic-version=$gic,highmem=off" "${cpu_args[@]}" -smp "$smp" -nic none
         -global virtio-mmio.force-legacy=false -m "${KORA_QEMU_RAM:-256M}")

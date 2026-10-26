@@ -6,12 +6,7 @@
 #elif RPI_VERSION == 3
 	#define PBASE 0x3F000000
 #elif RPI_VERSION == 4
-	#ifdef QEMU_TESTING
-		// QEMU's raspi4b machine uses RPi3 peripheral addresses
-		#define PBASE 0x3F000000
-	#else
-		#define PBASE 0xFE000000
-	#endif
+	#define PBASE 0xFE000000  // also QEMU's raspi4b machine
 #else
 	#define PBASE 0
 	#error RPI_VERSION not defined

@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = ["qemu_raspi3b", "qemu_virt", "hw_raspi3b", "hw_raspi4b"]
+TARGETS = ["qemu_raspi3b", "qemu_raspi4b", "qemu_virt", "hw_raspi3b", "hw_raspi4b"]
 MOCK = r"""#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path

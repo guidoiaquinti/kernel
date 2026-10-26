@@ -6,7 +6,8 @@ usage() {
     cat <<'USAGE'
 Usage: ./build.sh [options] [clean]
   --target NAME       Repeatable: hw_raspi3b, hw_raspi4b, qemu_raspi3b,
-                      qemu_virt or all (default: all four; first-seen order)
+                      qemu_raspi4b, qemu_virt or all (default: all five;
+                      first-seen order)
   --debug | --release Kernel configuration (default: Debug)
   --build-dir DIR     Build root (default: build beside this script)
   --userfs-only       Build only the shared AArch64 user programs/FAT image
@@ -39,10 +40,10 @@ add_target() {
     local name="$1" existing
     if [[ "$name" == all ]]; then
         add_target hw_raspi3b; add_target hw_raspi4b
-        add_target qemu_raspi3b; add_target qemu_virt
+        add_target qemu_raspi3b; add_target qemu_raspi4b; add_target qemu_virt
         return
     fi
-    case "$name" in hw_raspi3b|hw_raspi4b|qemu_raspi3b|qemu_virt) ;; *) fail "Unknown target: $name" ;; esac
+    case "$name" in hw_raspi3b|hw_raspi4b|qemu_raspi3b|qemu_raspi4b|qemu_virt) ;; *) fail "Unknown target: $name" ;; esac
     for existing in "${targets[@]:-}"; do [[ "$existing" != "$name" ]] || return 0; done
     targets+=("$name")
 }

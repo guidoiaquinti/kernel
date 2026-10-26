@@ -284,8 +284,8 @@ against scratch images. Never against a card that holds firmware until proven.
 2. **SD on Pi 4** (done): the same driver on EMMC2 (`PBASE + 0x340000`,
    mailbox clock 12), with no pin routing: the Pi 4's slot is wired to it.
    QEMU's raspi4b models EMMC2 (the card has to be attached to its bus
-   explicitly); a `qemu_raspi4b` target to keep that tested follows as its
-   own PR.
+   explicitly); the `qemu_raspi4b` target (its own PR) keeps the Pi 4 kernel,
+   EMMC2 included, tested in CI.
 3. **USB mass storage** through Circle's existing mass storage class driver.
 
 SD volumes mount read-only by default; writes are enabled explicitly until

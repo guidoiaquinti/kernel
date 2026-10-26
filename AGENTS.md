@@ -3,8 +3,8 @@
 Use this file when you drop into the workspace so you can ramp quickly and keep changes aligned with project conventions.
 
 ## Project Snapshot
-- **Target**: QEMU AArch64 virt (independent development target), plus Bare-metal Raspberry Pi kernel (Pi 3 via QEMU raspi3b, Pi 4 hardware)
-- **Current Capabilities**: EL0/FAT32 reads/writes and file tools, volume/assign paths, Pi USB keyboards, Pi 3 SD card; SMP threads and jobs; virt PL011/GICv2/v3, ramfb, VirtIO storage/input and CI development profiles
+- **Target**: QEMU AArch64 virt (independent development target), plus Bare-metal Raspberry Pi kernel (Pi 3 and Pi 4, also via QEMU raspi3b/raspi4b)
+- **Current Capabilities**: EL0/FAT32 reads/writes and file tools, volume/assign paths, Pi USB keyboards, Pi 3/Pi 4 SD card; SMP threads and jobs; virt PL011/GICv2/v3, ramfb, VirtIO storage/input and CI development profiles
 - **Toolchain**: LLVM/Clang cross-compilation managed by CMake (`./build.sh`)
 
 ## Where To Look
@@ -19,10 +19,11 @@ Use this file when you drop into the workspace so you can ramp quickly and keep 
 - Follow the clang-flavored C style already in the tree (four-space indent, same-line braces, snake_case identifiers).
 - Keep headers self-contained; prefer `const` pointers for memory-mapped peripherals.
 - Build with `./build.sh --target <name>`; repeated targets select a subset, and
-  `all` selects qemu_raspi3b, qemu_virt, hw_raspi3b and hw_raspi4b. The first
+  `all` selects qemu_raspi3b, qemu_raspi4b, qemu_virt, hw_raspi3b and hw_raspi4b. The first
   selected kernel supplies `build/compile_commands.json` for clangd.
 - Use `build.sh --target qemu_virt` and `run-qemu.sh --target qemu_virt` for
-  independent development; raspi3b is `qemu_raspi3b`. User programs/FS generation
+  independent development; raspi3b is `qemu_raspi3b`, raspi4b (QEMU 9.0+, no USB)
+  is `qemu_raspi4b`. User programs/FS generation
   live in `cmake/userfs.cmake` and `cmake/userfs`; kernels consume shared userfs.
 - FAT32 writes are developed on disposable QEMU images only: virt disks
   (`tests/run-qemu-write.py`) and raspi3b SD scratch cards from a

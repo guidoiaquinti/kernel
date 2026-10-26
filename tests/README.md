@@ -146,6 +146,9 @@ in the userfs-producing job.
 ./build.sh --target qemu_raspi3b
 tests/run-qemu-smoke.py --target qemu_raspi3b
 
+./build.sh --target qemu_raspi4b      # QEMU 9.0 or newer
+tests/run-qemu-smoke.py --target qemu_raspi4b
+
 ./build.sh --target qemu_virt
 tests/run-qemu-smoke.py --target qemu_virt --keyboard --disk build/userfs/aarch64/koraos.img --repeat 256
 ```

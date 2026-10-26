@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QEMU raspi3b SD card writes: a --sd-writable kernel on a disposable card, checked on the host.
+"""QEMU raspi3b/raspi4b SD card writes: a --sd-writable kernel on a disposable card, checked on the host.
 
 Builds a scratch card image (tests/create-sd-card-image.py), runs the smoke
 test with it attached writable (the SD write steps copy files, make a
@@ -9,6 +9,9 @@ must come from a build with --sd-writable, e.g.
 
   ./build.sh --target qemu_raspi3b --sd-writable --build-dir build/sd-writable \\
       --userfs-dir build/userfs/aarch64
+
+(or --target qemu_raspi4b, then run this with --target qemu_raspi4b: the card
+goes on the Pi 4's EMMC2).
 """
 import argparse
 import hashlib
@@ -69,10 +72,11 @@ def main():
     parser.add_argument("--build-dir", default=str(ROOT / "build/sd-writable"),
                         help="build root of the --sd-writable kernel")
     parser.add_argument("--size-mib", type=int, choices=sd_card.CARD_MIB, default=4096)
+    parser.add_argument("--target", choices=("qemu_raspi3b", "qemu_raspi4b"), default="qemu_raspi3b")
     parser.add_argument("--out")
     parser.add_argument("--qemu", default="qemu-system-aarch64")
     args = parser.parse_args()
-    output = Path(args.out or Path(args.build_dir) / "debug/qemu_raspi3b/qemu-sd-write").resolve()
+    output = Path(args.out or Path(args.build_dir) / "debug" / args.target / "qemu-sd-write").resolve()
     output.mkdir(parents=True, exist_ok=True)
     shared = Path(args.userfs_dir).resolve() / "koraos.img"
     before = hashlib.sha256(shared.read_bytes()).hexdigest()
@@ -80,7 +84,7 @@ def main():
     if image.exists():
         image.unlink()
     sd_card.create_image(shared, image, args.size_mib)
-    subprocess.run([str(ROOT / "tests/run-qemu-smoke.py"), "--target", "qemu_raspi3b",
+    subprocess.run([str(ROOT / "tests/run-qemu-smoke.py"), "--target", args.target,
                     "--build-dir", str(args.build_dir), "--sd", str(image), "--sd-writable",
                     "--qemu", args.qemu, "--out", str(output)], check=True)
     verify(image, output)

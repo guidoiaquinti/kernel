@@ -85,14 +85,12 @@ static void round_robin(void) {
           seen[2], seen[5]);
 }
 
-static void sleep_ticks(void) {
-    CHECK(sched_sleep_ticks(0, 100) == 0, "0 ms only yields");
-    CHECK(sched_sleep_ticks(5, 0) == 0, "no tick rate: yield");
-    CHECK(sched_sleep_ticks(1, 100) == 2, "1 ms: a whole tick, plus the partial one");
-    CHECK(sched_sleep_ticks(10, 100) == 2, "10 ms is one tick, plus one");
-    CHECK(sched_sleep_ticks(11, 100) == 3, "11 ms rounds up to two ticks");
-    CHECK(sched_sleep_ticks(300, 100) == 31, "300 ms");
-    CHECK(sched_sleep_ticks(600000, 1000) == 600001, "10 minutes at 1 kHz");
+static void wake_deadline(void) {
+    CHECK(sched_wake_us(1000, 300) == 301000, "300 ms after 1 ms");
+    CHECK(sched_wake_us(0, 1) == 1000, "1 ms");
+    uint64_t far = sched_wake_us(5000000, ~(uint64_t)0);
+    CHECK(far == ~(uint64_t)0, "an absurd sleep saturates instead of wrapping into the past");
+    CHECK(sched_wake_us(~(uint64_t)0 - 500, 1) == ~(uint64_t)0, "near the end of time");
 }
 
-TEST_MAIN(least_loaded, spreading, requested, round_robin, sleep_ticks)
+TEST_MAIN(least_loaded, spreading, requested, round_robin, wake_deadline)

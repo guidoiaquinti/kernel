@@ -11,6 +11,9 @@
 //   threadprobe last            main calls thread_exit(); the program lives on
 //                               until its other thread returns (exit code 0)
 //   threadprobe hang <cores>    spin on every core until killed
+//   threadprobe chatter <ms>    print a numbered line every tick for <ms>, from
+//                               a thread on every core (the serial line must
+//                               keep each one whole)
 #include "../../user/libk/koraos.h"
 
 // Result lines are assembled first and written with one write(): tasks on
@@ -313,7 +316,67 @@ static int hang_test(int cores) {
     }
 }
 
+static unsigned long chatter_ms;
+
+// Append the decimal digits of v to buf at *len (a thread's own buffer).
+static void append_num(char *buf, unsigned *len, unsigned long v) {
+    char digits[24];
+    unsigned n = 0;
+    do {
+        digits[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    while (n > 0) {
+        buf[(*len)++] = digits[--n];
+    }
+}
+
+static long chatter(void *id) {
+    unsigned long start = uptime_us();
+    for (unsigned long n = 0; uptime_us() - start < chatter_ms * 1000; n++) {
+        char buf[64];
+        unsigned len = 0;
+        for (const char *s = "threadprobe: chatter "; *s; s++) {
+            buf[len++] = *s;
+        }
+        append_num(buf, &len, (unsigned long)id);
+        for (const char *s = " line "; *s; s++) {
+            buf[len++] = *s;
+        }
+        append_num(buf, &len, n);
+        for (const char *s = " end\n"; *s; s++) {
+            buf[len++] = *s;
+        }
+        write(1, buf, len);
+        msleep(10);
+    }
+    return 0;
+}
+
+static int chatter_test(void) {
+    struct sysinfo info;
+    int cores = sysinfo(&info) == 0 ? (int)info.cpus : 1;
+    int tids[4];
+    for (int c = 0; c < cores; c++) {
+        tids[c] = thread_create(chatter, (void *)(long)c, c);
+    }
+    for (int c = 0; c < cores; c++) {
+        if (tids[c] > 0) {
+            thread_join(tids[c], NULL);
+        }
+    }
+    add("threadprobe: chatter done\n");
+    put_line();
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 && kstreq(argv[1], "chatter")) {
+        for (const char *p = argv[2]; *p >= '0' && *p <= '9'; p++) {
+            chatter_ms = chatter_ms * 10 + (unsigned long)(*p - '0');
+        }
+        return chatter_test();
+    }
     int cores = argc > 2 ? argv[2][0] - '0' : 1;
     if (argc < 2 || cores < 1 || cores > 4) {
         kputs("usage: threadprobe join|jobs|malloc|exit|hang <cores>, threadprobe last\n");

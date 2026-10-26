@@ -13,7 +13,8 @@ int sched_place(const unsigned *load, const bool *online, unsigned ncpu, int req
 // wrapping around and trying `from` itself last; -1 if none can run.
 int sched_round_robin(int slots, int from, bool (*can_run)(int slot, void *ctx), void *ctx);
 
-// How many ticks from now msleep(ms) wakes at `hz` ticks per second: whole
-// ticks rounded up, plus one because the current tick is already partly over.
-// 0 (just yield) for 0 ms or an unknown rate.
-uint64_t sched_sleep_ticks(uint64_t ms, unsigned hz);
+// When msleep(ms) started at `now_us` may wake, in microseconds of the
+// generic timer: now + ms, saturating instead of wrapping for absurd ms. The
+// deadline is a time, not a tick count: a late tick interrupt (the tick count
+// then lags until it catches up) cannot end a sleep early.
+uint64_t sched_wake_us(uint64_t now_us, uint64_t ms);

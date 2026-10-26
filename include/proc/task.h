@@ -63,7 +63,7 @@ typedef enum {
     BLOCK_CHILD,      // a child process to finish (waiting_for, or any if NULL)
     BLOCK_JOIN,       // a thread of its process to exit (waiting_for)
     BLOCK_QUEUE,      // a wake-up on a wait queue (wq)
-    BLOCK_SLEEP,      // the tick count to reach wake_tick
+    BLOCK_SLEEP,      // the timer to reach wake_us
 } block_reason_t;
 
 // Tasks sleeping until an event; woken all at once by wait_queue_wake_all().
@@ -110,7 +110,7 @@ typedef struct task {
     const void *waiting_for;          // BLOCK_CHILD: the process (NULL: any); BLOCK_JOIN: the task
     struct wait_queue *wq;            // BLOCK_QUEUE: the queue it sleeps on
     struct task *wq_next;             // next sleeper on that queue
-    uint64_t wake_tick;               // BLOCK_SLEEP: systick count to wake at
+    uint64_t wake_us;                 // BLOCK_SLEEP: timer_us() to wake at
     bool bkl;                         // holds the BKL (dropped while switched out)
     int forbid;                       // forbid() depth: keeps the BKL and the core
     void *stack;                      // user stack (for reclaim)
@@ -154,7 +154,8 @@ int task_wait_ex(int pid, int *code, int flags);
 // Reap child `pid`, blocking until it exits; returns its exit code, or -1.
 int task_wait(int pid);
 
-// Block the current task for at least `ms` milliseconds (rounded up to ticks).
+// Block the current task for at least `ms` milliseconds (it wakes on the first
+// tick of its core after that); 0 just yields.
 void task_msleep(uint64_t ms);
 
 // Sleep on `wq` until wait_queue_wake_all(). Call holding `cond`, the
@@ -170,7 +171,7 @@ void wait_queue_wake_all(struct wait_queue *wq);
 
 // Called by the timer interrupt on every tick: wakes due sleepers and asks
 // for a reschedule (taken on the way back to EL0).
-void sched_tick(uint64_t now);
+void sched_tick(void);
 
 // On the way back to EL0 (from src/arch/vectors.S): switch tasks if a
 // reschedule was requested, unless the task is forbid()den, and let a killed

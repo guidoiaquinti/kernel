@@ -192,12 +192,46 @@ static void kill_command(int argc, char **argv) {
     }
 }
 
+// Job lines go out in one write(): a job on another core, or on this one
+// between two writes, prints at the same time, and only a single write is
+// never split.
+static char job_line[64];
+static unsigned job_len;
+
+static void job_add(const char *s) {
+    while (*s && job_len < sizeof(job_line) - 1) {
+        job_line[job_len++] = *s++;
+    }
+}
+
+static void job_add_int(long v) {
+    char digits[24];
+    unsigned n = 0;
+    unsigned long u = v < 0 ? (unsigned long)-v : (unsigned long)v;
+    do {
+        digits[n++] = (char)('0' + u % 10);
+        u /= 10;
+    } while (u != 0);
+    if (v < 0) {
+        digits[n++] = '-';
+    }
+    while (n > 0 && job_len < sizeof(job_line) - 1) {
+        job_line[job_len++] = digits[--n];
+    }
+}
+
+static void job_put(void) {
+    write(1, job_line, job_len);
+    job_len = 0;
+}
+
 static void print_job_end(int pid, const char *what, int code) {
-    kputs("[");
-    kput_int(pid);
-    kputs(what);
-    kput_int(code);
-    kputs("\n");
+    job_add("[");
+    job_add_int(pid);
+    job_add(what);
+    job_add_int(code);
+    job_add("\n");
+    job_put();
 }
 
 // Report background jobs that finished since the last prompt (reaping them).
@@ -366,9 +400,10 @@ int main(void) {
             continue;
         }
         if (background) {
-            kputs("[");
-            kput_int(pid);
-            kputs("] started\n");
+            job_add("[");
+            job_add_int(pid);
+            job_add("] started\n");
+            job_put();
             continue;
         }
         print_job_end(pid, "] exited with ", wait(pid));

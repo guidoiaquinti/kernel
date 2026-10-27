@@ -48,6 +48,7 @@ Run `./build.sh` at least once. CMake writes `build/compile_commands.json`, whic
 
 ```bash
 ./build.sh --target qemu_raspi3b
+./build.sh --target qemu_raspi4b
 ./build.sh --target qemu_virt
 ./build.sh --target hw_raspi3b --release
 ./build.sh --target hw_raspi4b --release
@@ -55,7 +56,7 @@ Run `./build.sh` at least once. CMake writes `build/compile_commands.json`, whic
 ./build.sh --target all
 ```
 
-No target argument means all four. Repeated selections are deduplicated in
+No target argument means all five. Repeated selections are deduplicated in
 first-seen order. `--debug` (default) or `--release` applies to selected kernel
 configurations. Each has its own cache and `kernel.elf`, `kernel.img`, and
 `kernel.map` in `build/<debug|release>/<target>/`; `--build-dir` sets the root.
@@ -90,6 +91,7 @@ builds.
 
 ```bash
 ./run-qemu.sh --target qemu_raspi3b
+./run-qemu.sh --target qemu_raspi4b
 ./run-qemu.sh --target qemu_virt
 KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 ./run-qemu.sh --target qemu_virt --release --build-dir my-build -s -S
@@ -97,7 +99,14 @@ KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 ```
 
 `--smp N` (or `KORA_QEMU_SMP`) gives virt 1 to 4 cores (default 1); QEMU
-raspi3b always has four. See [smp.md](smp.md). `--gic 3` selects a GICv3 for
+raspi3b and raspi4b always have four.
+
+`qemu_raspi4b` is the Pi 4 kernel built for QEMU's `raspi4b` machine (QEMU 9.0
+or newer): the GIC-400, the PL011 console, the framebuffer and the SD card on
+EMMC2, with USB left out (QEMU has no Pi 4 PCIe/xHCI). It covers the Pi 4 code
+paths that `hw_raspi4b` otherwise only meets on real hardware.
+`KORA_QEMU_SD=IMAGE` puts an SD card in either raspi machine's slot, through a
+QEMU snapshot unless `KORA_QEMU_SD_WRITABLE=1`. See [smp.md](smp.md). `--gic 3` selects a GICv3 for
 virt (default 2).
 
 On an Apple Silicon Mac, `--accel hvf` runs virt on the host's own cores
@@ -212,7 +221,7 @@ mutating tools sync before reporting success. Use the shell's `sync` command
 to flush changes made by other programs. Names use UTF-8, while interactive
 console input currently accepts ASCII; quotes handle spaces in ASCII paths.
 
-### SD card (Pi 3, Pi 4, QEMU raspi3b)
+### SD card (Pi 3, Pi 4, QEMU raspi3b and raspi4b)
 
 The Pi kernels read the SD card through the SoC's SDHCI controller (the
 Arasan controller on the Pi 3, EMMC2 on the Pi 4): the
@@ -223,7 +232,8 @@ becomes browsable. The card is **read-only** unless the kernel is built with
 
 In QEMU, `tests/create-sd-card-image.py` makes a disposable card (64 MiB is
 presented as a standard-capacity card, 4096 MiB as SDHC) and the smoke test
-attaches it with `--sd`, read-only through a QEMU snapshot:
+attaches it with `--sd`, read-only through a QEMU snapshot (on raspi4b to
+EMMC2, where the Pi 4's slot is):
 
 ```bash
 tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib 4096
@@ -231,7 +241,8 @@ tests/run-qemu-smoke.py --target qemu_raspi3b --sd build/sd-card.img
 ```
 
 For writes, build a separate `--sd-writable` kernel and let the wrapper check
-the card with `fsck.fat` and mtools after QEMU exits:
+the card with `fsck.fat` and mtools after QEMU exits (add `--target
+qemu_raspi4b` to both for the Pi 4):
 
 ```bash
 ./build.sh --target qemu_raspi3b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
@@ -244,7 +255,8 @@ retains host sanitizer/CLI tests and raspi3b smoke. Independent virt profiles
 cover embedded graphics, external disk/keyboard at 128 MiB, serial-only 64 MiB,
 EL2 entry, writable scratch-root integrity, and repeated EL0 page/malloc allocation and nested-process lifetime. A raspi3b
 SD job reads standard and high-capacity scratch cards and writes one with a
-`--sd-writable` kernel. Logs and
+`--sd-writable` kernel. A raspi4b job (in a Debian container, for QEMU 10) runs
+the smoke test with stress and the EMMC2 card reads and writes. Logs and
 screenshots are retained on failure. QEMU does not validate real Pi USB, HDMI,
 cache behavior or firmware. The current virt profile has no SMP, GICv3, PCI,
 networking, audio or VirtIO GPU; scheduling remains cooperative.

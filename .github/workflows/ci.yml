@@ -215,3 +215,58 @@ jobs:
             build/debug/qemu_raspi3b/qemu-*/*.log
             build/debug/qemu_raspi3b/qemu-*/*.png
           if-no-files-found: ignore
+
+  raspi4b-tests:
+    # QEMU's raspi4b machine arrived in QEMU 9.0; Ubuntu 24.04 ships 8.2, so
+    # this job runs in Debian trixie (QEMU 10).
+    name: QEMU raspi4b (${{ matrix.profile }})
+    needs: userfs
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: smoke-stress
+          - profile: sdhc-read-only
+          - profile: sdhc-writable
+    steps:
+      - name: Install kernel toolchain and QEMU
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates python3 clang lld llvm cmake make mtools dosfstools qemu-system-arm
+      - uses: actions/checkout@v7
+      # The checkout belongs to the runner user but the container runs as
+      # root, so git refuses the tree and the kernel loses its build id.
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/download-artifact@v7
+        with:
+          name: userfs-aarch64
+          path: build/userfs/aarch64
+      - name: Build raspi4b with prepared userfs
+        if: matrix.profile != 'sdhc-writable'
+        run: ./build.sh --target qemu_raspi4b --userfs-dir build/userfs/aarch64
+      - name: Smoke test with repeated thread, kill and demo steps
+        if: matrix.profile == 'smoke-stress'
+        run: tests/run-qemu-smoke.py --target qemu_raspi4b --stress 3 --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
+      - name: Read a scratch card on EMMC2
+        if: matrix.profile == 'sdhc-read-only'
+        run: |
+          tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib 4096
+          tests/run-qemu-smoke.py --target qemu_raspi4b --sd build/sd-card.img --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
+      - name: Build raspi4b with SD writes enabled
+        if: matrix.profile == 'sdhc-writable'
+        run: ./build.sh --target qemu_raspi4b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
+      - name: Write a scratch card on EMMC2 and verify it on the host
+        if: matrix.profile == 'sdhc-writable'
+        run: tests/run-qemu-sd-write.py --target qemu_raspi4b --size-mib 4096 --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
+      - name: Upload raspi4b serial logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: raspi4b-${{ matrix.profile }}
+          path: |
+            build/debug/qemu_raspi4b/qemu-*/*.log
+            build/debug/qemu_raspi4b/qemu-*/*.png
+          if-no-files-found: ignore

@@ -20,15 +20,18 @@ Install LLVM/Clang, CMake 3.20+, Python 3, and mtools; install QEMU to emulate.
 # Show ramfb and use the virtual keyboard
 KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 
-# Retained Raspberry Pi emulator
+# Raspberry Pi 3 and Pi 4 under QEMU (raspi4b needs QEMU 9.0 or newer)
 ./build.sh --target qemu_raspi3b
 ./run-qemu.sh --target qemu_raspi3b
+./build.sh --target qemu_raspi4b
+./run-qemu.sh --target qemu_raspi4b
 
-# All four targets (also the default when no target is specified)
+# All five targets (also the default when no target is specified)
 ./build.sh --target all
 ```
 
-Targets are `qemu_raspi3b`, `qemu_virt`, `hw_raspi3b`, and `hw_raspi4b`.
+Targets are `qemu_raspi3b`, `qemu_raspi4b`, `qemu_virt`, `hw_raspi3b`, and
+`hw_raspi4b`.
 Repeat `--target` to select a subset. `--release` changes the kernel build
 configuration; `--build-dir DIR` changes the build root.
 

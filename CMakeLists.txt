@@ -11,7 +11,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Modern configurations select one canonical target. Direct legacy CMake
 # configurations retain the old variant switches and artifact names.
 set(KORAOS_TARGET "" CACHE STRING "Canonical kernel target")
-set_property(CACHE KORAOS_TARGET PROPERTY STRINGS hw_raspi3b hw_raspi4b qemu_raspi3b qemu_virt)
+set_property(CACHE KORAOS_TARGET PROPERTY STRINGS hw_raspi3b hw_raspi4b qemu_raspi3b qemu_raspi4b qemu_virt)
 set(KORAOS_USERFS_DIR "" CACHE PATH "Prepared shared AArch64 userfs directory")
 option(KORAOS_SD_WRITABLE "Let the kernel write to the SD card (default: read-only)" OFF)
 set(RPI_VERSION "4" CACHE STRING "Physical Raspberry Pi version (3 or 4)")
@@ -20,6 +20,9 @@ option(BUILD_QEMU_VARIANT "Build kernel image configured for QEMU" ON)
 option(BUILD_VIRT_VARIANT "Build kernel for QEMU AArch64 virt" OFF)
 option(BUILD_HW_VARIANT "Build kernel image configured for physical hardware" ON)
 
+# The QEMU raspi variant's board: Pi 3 (raspi3b) unless the target is
+# qemu_raspi4b; legacy configurations keep the Pi 3 machine.
+set(QEMU_BOARD 3)
 if(KORAOS_TARGET)
     set(BUILD_QEMU_VARIANT OFF)
     set(BUILD_VIRT_VARIANT OFF)
@@ -27,6 +30,10 @@ if(KORAOS_TARGET)
     if(KORAOS_TARGET STREQUAL "qemu_raspi3b")
         set(BUILD_QEMU_VARIANT ON)
         set(RPI_VERSION 3)
+    elseif(KORAOS_TARGET STREQUAL "qemu_raspi4b")
+        set(BUILD_QEMU_VARIANT ON)
+        set(RPI_VERSION 4)
+        set(QEMU_BOARD 4)
     elseif(KORAOS_TARGET STREQUAL "qemu_virt")
         set(BUILD_VIRT_VARIANT ON)
         set(RPI_VERSION 3)
@@ -37,14 +44,14 @@ if(KORAOS_TARGET)
         set(BUILD_HW_VARIANT ON)
         set(RPI_VERSION 4)
     else()
-        message(FATAL_ERROR "Unknown KORAOS_TARGET '${KORAOS_TARGET}'; choose hw_raspi3b, hw_raspi4b, qemu_raspi3b or qemu_virt.")
+        message(FATAL_ERROR "Unknown KORAOS_TARGET '${KORAOS_TARGET}'; choose hw_raspi3b, hw_raspi4b, qemu_raspi3b, qemu_raspi4b or qemu_virt.")
     endif()
     set(_default_bootmnt "${CMAKE_BINARY_DIR}/boot")
 else()
     set(_default_bootmnt "/workspace/build/boot")
 endif()
 if(NOT RPI_VERSION MATCHES "^[34]$")
-    message(FATAL_ERROR "RPI_VERSION must be 3 or 4; the raspi3b QEMU target always uses Pi 3.")
+    message(FATAL_ERROR "RPI_VERSION must be 3 or 4.")
 endif()
 set(BOOTMNT "${_default_bootmnt}" CACHE PATH "Boot mount directory")
 
@@ -311,7 +318,7 @@ endfunction()
 
 if(BUILD_QEMU_VARIANT)
     add_kernel_variant(qemu
-        QEMU BOARD 3
+        QEMU BOARD ${QEMU_BOARD}
         OUTPUT_NAME kernel8
         IMAGE_NAME kernel8.img
         BOOT_IMAGE_NAME kernel8-qemu.img
@@ -424,14 +431,14 @@ function(add_circle_library NAME BOARD)
     )
 endfunction()
 
-if(BUILD_QEMU_VARIANT OR (BUILD_HW_VARIANT AND RPI_VERSION STREQUAL "3"))
+if((BUILD_QEMU_VARIANT AND QEMU_BOARD STREQUAL "3") OR (BUILD_HW_VARIANT AND RPI_VERSION STREQUAL "3"))
     add_circle_library(circle_usb_rpi3 3)
 endif()
-if(BUILD_HW_VARIANT AND RPI_VERSION STREQUAL "4")
+if((BUILD_QEMU_VARIANT AND QEMU_BOARD STREQUAL "4") OR (BUILD_HW_VARIANT AND RPI_VERSION STREQUAL "4"))
     add_circle_library(circle_usb_rpi4 4)
 endif()
 if(BUILD_QEMU_VARIANT)
-    target_link_libraries(kernel_qemu PRIVATE circle_usb_rpi3)
+    target_link_libraries(kernel_qemu PRIVATE circle_usb_rpi${QEMU_BOARD})
 endif()
 if(BUILD_HW_VARIANT)
     target_link_libraries(kernel_hw PRIVATE circle_usb_rpi${RPI_VERSION})
@@ -439,7 +446,7 @@ endif()
 # QEMU virt uses independent VirtIO input and never links Circle.
 
 # Print configuration
-message(STATUS "Physical hardware board: Raspberry Pi ${RPI_VERSION}; QEMU raspi3b board: Pi 3")
+message(STATUS "Physical hardware board: Raspberry Pi ${RPI_VERSION}; QEMU raspi board: Pi ${QEMU_BOARD}")
 message(STATUS "Boot mount directory: ${BOOTMNT}")
 message(STATUS "Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "Linker script: ${LINKER_SCRIPT}")

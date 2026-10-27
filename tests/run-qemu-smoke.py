@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""QEMU smoke test: boot the QEMU kernel on the raspi3b machine, drive the
-shell over the serial line, and check the output and the framebuffer.
+"""QEMU smoke test: boot the QEMU kernel on the raspi3b, raspi4b or virt
+machine, drive the shell over the serial line, and check the output and the
+framebuffer.
 
 Waits for expected output (with timeouts) rather than sleeping, so it is not
 sensitive to how fast the machine runs QEMU. Standard library only.
 
-Usage: tests/run-qemu-smoke.py --target qemu_raspi3b|qemu_virt [--out DIR]
+Usage: tests/run-qemu-smoke.py --target qemu_raspi3b|qemu_raspi4b|qemu_virt [--out DIR]
 Build the kernel first with: ./build.sh --target qemu_raspi3b
 
 Artifacts in --out (default build/qemu-smoke): serial.log and one PNG
@@ -43,7 +44,7 @@ class Qemu:
         self.pending = b""  # output not yet consumed by expect()
         # The monitor socket path is relative to QEMU's working directory:
         # UNIX socket paths are limited to ~104 bytes and temp dirs are long.
-        machine_args = ["-M", "raspi3b"] if machine == "raspi3b" else [
+        machine_args = ["-M", machine] if machine.startswith("raspi") else [
             "-M", "virt,gic-version=%d,highmem=off" % gic + (",virtualization=on" if el2 else ""),
             *(["-accel", "hvf", "-cpu", "host"] if accel == "hvf" else ["-cpu", "cortex-a72"]),
             "-smp", str(smp), "-nic", "none", "-global", "virtio-mmio.force-legacy=false", "-m", ram]
@@ -438,7 +439,7 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         deadline = time.monotonic() + 5
         while True:
             q.send("irqs\r")
-            q.expect(rb"^controller: (?:BCM2835 legacy|GICv[23] \(virt\))")
+            q.expect(rb"^controller: (?:BCM2835 legacy|GIC-400|GICv[23] \(virt\))")
             m = q.expect(rb"^systick: (\d+) ticks, uptime (\d+)\.(\d+) s")
             ticks = int(m.group(1))
             uptime = int(m.group(2)) + int(m.group(3)) / 1000
@@ -999,7 +1000,7 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--target", choices=("qemu_raspi3b", "qemu_virt"))
+    parser.add_argument("--target", choices=("qemu_raspi3b", "qemu_raspi4b", "qemu_virt"))
     parser.add_argument("--machine", choices=("raspi3b", "virt"), help="deprecated target alias")
     parser.add_argument("--build-dir", default=os.environ.get("BUILD_DIR", os.path.join(ROOT, "build")))
     mode = parser.add_mutually_exclusive_group()
@@ -1012,7 +1013,7 @@ def main():
     parser.add_argument("--accel", choices=("tcg", "hvf"), default="tcg",
                         help="virt on an Apple Silicon Mac: hvf runs on the host's cores")
     parser.add_argument("--smp", type=int, default=1,
-                        help="virt cores (raspi3b always has 4); all must come online")
+                        help="virt cores (raspi3b and raspi4b always have 4); all must come online")
     parser.add_argument("--repeat", type=int, default=0, help="repeat the EL0 page/malloc/nested-process probe")
     parser.add_argument("--stress", type=int, default=0,
                         help="rounds of the thread, kill and demo steps to repeat at the end")
@@ -1023,7 +1024,7 @@ def main():
     parser.add_argument("--write-test", action="store_true", help="mutate a disposable writable FAT32 root")
     parser.add_argument("--disk-writable", action="store_true", help="enable raw writes to the supplied test disk")
     parser.add_argument("--no-graphics", action="store_true")
-    parser.add_argument("--sd", help="raspi3b: SD card image (tests/create-sd-card-image.py)")
+    parser.add_argument("--sd", help="raspi3b/raspi4b: SD card image (tests/create-sd-card-image.py)")
     parser.add_argument("--sd-writable", action="store_true",
                         help="attach the card writable; the kernel must be built --sd-writable")
     parser.add_argument("--kernel")
@@ -1037,7 +1038,7 @@ def main():
         args.target = alias
         print("warning: --machine is deprecated; use --target " + alias, file=sys.stderr)
     args.target = args.target or "qemu_raspi3b"
-    args.machine = "virt" if args.target == "qemu_virt" else "raspi3b"
+    args.machine = args.target[len("qemu_"):]
     kernel_dir = os.path.join(os.path.abspath(args.build_dir),
                               "release" if args.release else "debug", args.target)
     args.out = args.out or os.path.join(kernel_dir, "qemu-smoke")
@@ -1063,11 +1064,18 @@ def main():
 
     extra = ["-device", "ramfb"] if args.machine == "virt" and not args.no_graphics else []
     if args.sd:
-        if args.machine != "raspi3b" or not os.path.isfile(args.sd):
-            parser.error("--sd requires raspi3b and an existing card image")
+        if not args.machine.startswith("raspi") or not os.path.isfile(args.sd):
+            parser.error("--sd requires raspi3b or raspi4b and an existing card image")
         # Read-only runs never touch the image (QEMU's SD card cannot be read-only).
-        extra += ["-drive", "if=sd,format=raw,file=%s%s" % (os.path.abspath(args.sd),
-                                                          "" if args.sd_writable else ",snapshot=on")]
+        drive = "format=raw,file=%s%s" % (os.path.abspath(args.sd).replace(",", ",,"),
+                                          "" if args.sd_writable else ",snapshot=on")
+        if args.machine == "raspi3b":
+            extra += ["-drive", "if=sd," + drive]
+        else:
+            # The Pi 4's slot is on EMMC2, but QEMU puts if=sd cards on the
+            # Arasan controller: attach it to EMMC2's bus, the first SDHCI.
+            extra += ["-drive", "if=none,id=sdcard," + drive,
+                      "-device", "sd-card,drive=sdcard,bus=main-system-bus/generic-sdhci/sd-bus"]
     elif args.sd_writable:
         parser.error("--sd-writable requires --sd")
     if args.keyboard:
@@ -1083,12 +1091,12 @@ def main():
     if args.smp < 1 or args.smp > 4:
         parser.error("--smp must be between 1 and 4 (KoraOS manages up to 4 cores)")
     if args.smp != 1 and args.machine != "virt":
-        parser.error("--smp applies to virt (raspi3b always has 4 cores)")
+        parser.error("--smp applies to virt (raspi3b and raspi4b always have 4 cores)")
     if (args.gic != 2 or args.accel != "tcg") and args.machine != "virt":
         parser.error("--gic and --accel apply to virt")
     if args.accel == "hvf" and (args.gic != 3 or args.el2):
         parser.error("--accel hvf needs --gic 3 and no --el2 (hvf has no EL2)")
-    cores = 4 if args.machine == "raspi3b" else args.smp
+    cores = 4 if args.machine.startswith("raspi") else args.smp
     q = Qemu(args.qemu, os.path.abspath(args.kernel), os.path.abspath(args.out), args.machine, args.ram,
              extra, args.el2, args.smp, args.gic, args.accel)
     failed = False
@@ -1114,7 +1122,7 @@ def main():
             sys.exit(1)  # QEMU is still stopped by the finally below
         if args.disk:
             q.expect(rb"\[blkdev\] using VirtIO disk")
-        if args.machine == "raspi3b":
+        if args.machine.startswith("raspi"):
             # The SD slot: a card announces itself, an empty slot says so.
             m = q.expect(rb"^\[sd\] (no card|(SDSC|SDHC/SDXC) card, (\d+) MB, (read-only|writable))")
             if args.sd is None and m.group(1) != b"no card":

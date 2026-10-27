@@ -707,8 +707,10 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         with open(q.log.name, "rb") as log:
             log.seek(start)
             text = log.read()
-        # A prompt prints no newline, so a whole line may follow one.
-        prompts = rb"^(?:\$ |koraos> )*"
+        # A prompt prints no newline, so a whole line may follow one; so may
+        # the start of the `tasks` command being typed, which the console
+        # echoes keystroke by keystroke as it arrives.
+        prompts = rb"^(?:\$ |koraos> (?:t(?:a(?:s(?:ks?)?)?)?)?)*"
         chatter = re.compile(prompts + rb"threadprobe: chatter (?:\d+ line \d+ end|done)\r?$")
         console = re.compile(prompts + rb"(?:big kernel lock: (?:free|pid \d+)|"
                              rb"kernel stack peak: \d+ of \d+ bytes)\r?$")

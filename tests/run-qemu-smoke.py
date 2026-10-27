@@ -224,66 +224,81 @@ def sd_fixture():
     return module
 
 
+def storage_steps(q, what, label, writable, cores):
+    """Steps for a scratch drive from tests/create-sd-card-image.py (an SD card or
+    a USB drive) whose FAT32 volume is labelled `label`."""
+    # FAT32 writes go one sector per request, and in QEMU a USB command takes
+    # several full-speed frames: copying BIG.BIN to a USB drive takes a minute.
+    timeout = 300 if what.startswith("USB") else 30
+    card = sd_fixture()
+    big = card.big_content()
+    sums = {"README.TXT": (len(card.MARKER), card.fnv1a64(card.MARKER.encode())),
+            "BIG.BIN": (len(big), card.fnv1a64(big))}
+    device = []
+
+    def check_sums(names, core=None):
+        """sumprobe each drive file in `names` (path: expected file name), on
+        `core` if given."""
+        q.send("sumprobe %s%s\r" % (" ".join("%s:/%s" % (device[0], path) for path in names),
+                                    "" if core is None else " @%d" % core))
+        for path, expected in names.items():
+            m = q.expect(rb"^sumprobe: \S+ (?:(\d+) ([0-9a-f]{16})|unreadable)\r?\n", timeout)
+            if m.group(1) is None:
+                raise Failure("cannot read %s:/%s from the %s" % (device[0], path, what))
+            got = (int(m.group(1)), int(m.group(2), 16))
+            if got != sums[expected]:
+                raise Failure("%s:/%s from the %s: size/checksum %s, want %s"
+                              % (device[0], path, what, got, sums[expected]))
+        q.expect(rb"\] exited with 0")
+        q.expect(PROMPT)
+
+    def volume():
+        q.send("volumes\r")
+        m = q.expect(rb"^(df\d+): " + label.lower().encode() + rb"( \[read-only\])?\r?\n")
+        q.expect(PROMPT)
+        device.append(m.group(1).decode())
+        if (m.group(2) is None) != writable:
+            raise Failure("%s volume is %s" % (what, "writable" if m.group(2) is None else "read-only"))
+        # Multi-block reads of an odd-sized file, compared with the host's bytes:
+        # from core 0, where USB interrupts arrive, and from the last core.
+        check_sums({"README.TXT": "README.TXT", "BIG.BIN": "BIG.BIN"}, 0)
+        if cores > 1:
+            check_sums({"BIG.BIN": "BIG.BIN"}, cores - 1)
+        # A program loaded straight off the drive.
+        q.send("%s:/bin/hello\r" % device[0])
+        q.expect(rb"^Hello from userland \(ELF\)")
+        q.expect(PROMPT)
+    yield "%s: its FAT32 volume, multi-block reads and a program from it" % what, volume
+
+    def writes():
+        if not writable:
+            q.send("mkdir %s:/NOPE\r" % device[0])
+            q.expect(rb"mkdir: cannot create")
+            q.expect(PROMPT)
+            return
+        for command in ("cp %s:/BIG.BIN %s:/COPY.BIN", "mkdir %s:/NEWDIR",
+                        "cp %s:/README.TXT %s:/NEWDIR/NOTE.TXT", "sync"):
+            q.send((command % ((device[0],) * command.count("%s"))) + "\r")
+            if command != "sync":
+                q.expect(rb"\] exited with 0", timeout)
+            q.expect(PROMPT, timeout)
+        check_sums({"COPY.BIN": "BIG.BIN", "NEWDIR/NOTE.TXT": "README.TXT"})
+    yield ("%s: writes, verified on the host afterwards" % what if writable else
+           "%s: read-only unless built --storage-writable" % what), writes
+
+
 def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_test=False, cores=1,
-        stress=0, sd_card=False, sd_write=False):
-    """Yield (name, check) steps; each check raises Failure on error."""
+        stress=0, media=()):
+    """Yield (name, check) steps; each check raises Failure on error. `media` lists
+    the attached scratch drives as (what, volume label, writable) tuples."""
 
     def boot():
         q.expect(rb"KoraOS shell\. Type 'help'\.", timeout=90)
         q.expect(PROMPT)
     yield "boots to the shell", boot
 
-    if sd_card:
-        card = sd_fixture()
-        big = card.big_content()
-        sums = {"README.TXT": (len(card.MARKER), card.fnv1a64(card.MARKER.encode())),
-                "BIG.BIN": (len(big), card.fnv1a64(big))}
-        device = []
-
-        def check_sums(names):
-            """sumprobe each card file in `names` (path: expected file name)."""
-            q.send("sumprobe %s\r" % " ".join("%s:/%s" % (device[0], path) for path in names))
-            for path, expected in names.items():
-                m = q.expect(rb"^sumprobe: \S+ (?:(\d+) ([0-9a-f]{16})|unreadable)\r?\n")
-                if m.group(1) is None:
-                    raise Failure("cannot read %s:/%s from the SD card" % (device[0], path))
-                got = (int(m.group(1)), int(m.group(2), 16))
-                if got != sums[expected]:
-                    raise Failure("%s:/%s from the SD card: size/checksum %s, want %s"
-                                  % (device[0], path, got, sums[expected]))
-            q.expect(rb"\] exited with 0")
-            q.expect(PROMPT)
-
-        def sd_volume():
-            q.send("volumes\r")
-            m = q.expect(rb"^(df\d+): sdcard( \[read-only\])?\r?\n")
-            q.expect(PROMPT)
-            device.append(m.group(1).decode())
-            if (m.group(2) is None) != sd_write:
-                raise Failure("SD volume is %s" % ("writable" if m.group(2) is None else "read-only"))
-            # Multi-block reads of an odd-sized file, compared with the host's bytes.
-            check_sums({"README.TXT": "README.TXT", "BIG.BIN": "BIG.BIN"})
-            # A program loaded straight off the card.
-            q.send("%s:/bin/hello\r" % device[0])
-            q.expect(rb"^Hello from userland \(ELF\)")
-            q.expect(PROMPT)
-        yield "SD card: its FAT32 volume, multi-block reads and a program from it", sd_volume
-
-        def sd_writes():
-            if not sd_write:
-                q.send("mkdir %s:/NOPE\r" % device[0])
-                q.expect(rb"mkdir: cannot create")
-                q.expect(PROMPT)
-                return
-            for command in ("cp %s:/BIG.BIN %s:/COPY.BIN", "mkdir %s:/NEWDIR",
-                            "cp %s:/README.TXT %s:/NEWDIR/NOTE.TXT", "sync"):
-                q.send((command % ((device[0],) * command.count("%s"))) + "\r")
-                if command != "sync":
-                    q.expect(rb"\] exited with 0")
-                q.expect(PROMPT)
-            check_sums({"COPY.BIN": "BIG.BIN", "NEWDIR/NOTE.TXT": "README.TXT"})
-        yield ("SD card: writes, verified on the host afterwards" if sd_write else
-               "SD card: read-only unless built --sd-writable"), sd_writes
+    for what, label, writable in media:
+        yield from storage_steps(q, what, label, writable, cores)
 
     def ls():
         q.send("ls /bin\r")
@@ -692,8 +707,10 @@ def run(q, graphics=True, keyboard=False, repeat=0, multi_volume=False, write_te
         with open(q.log.name, "rb") as log:
             log.seek(start)
             text = log.read()
-        # A prompt prints no newline, so a whole line may follow one.
-        prompts = rb"^(?:\$ |koraos> )*"
+        # A prompt prints no newline, so a whole line may follow one; so may
+        # the start of the `tasks` command being typed, which the console
+        # echoes keystroke by keystroke as it arrives.
+        prompts = rb"^(?:\$ |koraos> (?:t(?:a(?:s(?:ks?)?)?)?)?)*"
         chatter = re.compile(prompts + rb"threadprobe: chatter (?:\d+ line \d+ end|done)\r?$")
         console = re.compile(prompts + rb"(?:big kernel lock: (?:free|pid \d+)|"
                              rb"kernel stack peak: \d+ of \d+ bytes)\r?$")
@@ -1026,7 +1043,10 @@ def main():
     parser.add_argument("--no-graphics", action="store_true")
     parser.add_argument("--sd", help="raspi3b/raspi4b: SD card image (tests/create-sd-card-image.py)")
     parser.add_argument("--sd-writable", action="store_true",
-                        help="attach the card writable; the kernel must be built --sd-writable")
+                        help="attach the card writable; the kernel must be built --storage-writable")
+    parser.add_argument("--usb-stick", help="raspi3b: USB drive image (tests/create-sd-card-image.py --label USBSTICK)")
+    parser.add_argument("--usb-stick-writable", action="store_true",
+                        help="attach the USB drive writable; the kernel must be built --storage-writable")
     parser.add_argument("--kernel")
     parser.add_argument("--qemu", default="qemu-system-aarch64")
     parser.add_argument("--out")
@@ -1078,6 +1098,19 @@ def main():
                       "-device", "sd-card,drive=sdcard,bus=main-system-bus/generic-sdhci/sd-bus"]
     elif args.sd_writable:
         parser.error("--sd-writable requires --sd")
+    if args.usb_stick:
+        # QEMU's raspi4b has no PCIe, so no xHCI: USB is raspi3b only.
+        if args.machine != "raspi3b" or not os.path.isfile(args.usb_stick):
+            parser.error("--usb-stick requires raspi3b and an existing drive image")
+        extra += ["-drive", "if=none,id=stick,format=raw,file=%s%s" %
+                  (os.path.abspath(args.usb_stick).replace(",", ",,"),
+                   "" if args.usb_stick_writable else ",snapshot=on"),
+                  "-device", "usb-storage,drive=stick",
+                  # A keyboard too, so its interrupt transfers (polled every
+                  # frame on core 0) run beside the drive's bulk ones.
+                  "-device", "usb-kbd"]
+    elif args.usb_stick_writable:
+        parser.error("--usb-stick-writable requires --usb-stick")
     if args.keyboard:
         if args.machine != "virt":
             parser.error("--keyboard requires virt")
@@ -1122,6 +1155,15 @@ def main():
             sys.exit(1)  # QEMU is still stopped by the finally below
         if args.disk:
             q.expect(rb"\[blkdev\] using VirtIO disk")
+        if args.usb_stick:
+            # Circle enumerates before the block layer comes up.
+            m = q.expect(rb"^\[usb\] drive umsd1: (\d+) MB, (read-only|writable)")
+            q.expect(rb"^circle: USB keyboard ready")
+            want = (str(os.path.getsize(args.usb_stick) // (1024 * 1024)).encode(),
+                    b"writable" if args.usb_stick_writable else b"read-only")
+            if m.groups() != want:
+                raise Failure("USB drive line %r, want %s" % (m.group(0), want))
+            print("ok   - USB drive: %s MB, %s" % (m.group(1).decode(), m.group(2).decode()))
         if args.machine.startswith("raspi"):
             # The SD slot: a card announces itself, an empty slot says so.
             m = q.expect(rb"^\[sd\] (no card|(SDSC|SDHC/SDXC) card, (\d+) MB, (read-only|writable))")
@@ -1141,9 +1183,10 @@ def main():
             return
         if args.keyboard:
             q.expect(rb"\[virtio-input\] keyboard ready")
+        media = ([("SD card", "SDCARD", args.sd_writable)] if args.sd else []) + \
+            ([("USB drive", "USBSTICK", args.usb_stick_writable)] if args.usb_stick else [])
         for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume,
-                               args.write_test, cores, args.stress, args.sd is not None,
-                               args.sd_writable):
+                               args.write_test, cores, args.stress, media):
             try:
                 check()
                 print("ok   - " + name)

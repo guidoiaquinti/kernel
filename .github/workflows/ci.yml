@@ -169,7 +169,7 @@ jobs:
           if-no-files-found: ignore
 
   sd-tests:
-    name: QEMU raspi3b SD card (${{ matrix.profile }})
+    name: QEMU raspi3b storage (${{ matrix.profile }})
     needs: userfs
     runs-on: ubuntu-24.04
     strategy:
@@ -182,6 +182,9 @@ jobs:
             size: 4096
           - profile: sdhc-writable
             size: 4096
+          - profile: usb-read-only
+          - profile: sd-usb-writable
+            size: 4096
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
@@ -193,24 +196,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang lld llvm cmake mtools dosfstools qemu-system-arm
       - name: Build raspi3b with prepared userfs
-        if: matrix.profile != 'sdhc-writable'
+        if: ${{ !endsWith(matrix.profile, 'writable') }}
         run: ./build.sh --target qemu_raspi3b --userfs-dir build/userfs/aarch64
       - name: Read a scratch card
-        if: matrix.profile != 'sdhc-writable'
+        if: startsWith(matrix.profile, 'sd') && !endsWith(matrix.profile, 'writable')
         run: |
           tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib ${{ matrix.size }}
           tests/run-qemu-smoke.py --target qemu_raspi3b --sd build/sd-card.img --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
-      - name: Build raspi3b with SD writes enabled
-        if: matrix.profile == 'sdhc-writable'
-        run: ./build.sh --target qemu_raspi3b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
+      - name: Read a scratch USB drive from every core, beside a USB keyboard
+        if: matrix.profile == 'usb-read-only'
+        run: |
+          tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/usb-stick.img --label USBSTICK
+          tests/run-qemu-smoke.py --target qemu_raspi3b --stress 3 --usb-stick build/usb-stick.img --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
+      - name: Build raspi3b with storage writes enabled
+        if: endsWith(matrix.profile, 'writable')
+        run: ./build.sh --target qemu_raspi3b --storage-writable --build-dir build/storage-writable --userfs-dir build/userfs/aarch64
       - name: Write a scratch card and verify it on the host
         if: matrix.profile == 'sdhc-writable'
-        run: tests/run-qemu-sd-write.py --size-mib ${{ matrix.size }} --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
-      - name: Upload SD serial logs and screenshots
+        run: tests/run-qemu-storage-write.py --size-mib ${{ matrix.size }} --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
+      - name: Write a scratch card and USB drive together and verify them on the host
+        if: matrix.profile == 'sd-usb-writable'
+        run: tests/run-qemu-storage-write.py --media both --size-mib ${{ matrix.size }} --out build/debug/qemu_raspi3b/qemu-${{ matrix.profile }}
+      - name: Upload storage serial logs and screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sd-${{ matrix.profile }}
+          name: storage-${{ matrix.profile }}
           path: |
             build/debug/qemu_raspi3b/qemu-*/*.log
             build/debug/qemu_raspi3b/qemu-*/*.png
@@ -255,12 +266,12 @@ jobs:
         run: |
           tests/create-sd-card-image.py build/userfs/aarch64/koraos.img --output build/sd-card.img --size-mib 4096
           tests/run-qemu-smoke.py --target qemu_raspi4b --sd build/sd-card.img --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
-      - name: Build raspi4b with SD writes enabled
+      - name: Build raspi4b with storage writes enabled
         if: matrix.profile == 'sdhc-writable'
-        run: ./build.sh --target qemu_raspi4b --sd-writable --build-dir build/sd-writable --userfs-dir build/userfs/aarch64
+        run: ./build.sh --target qemu_raspi4b --storage-writable --build-dir build/storage-writable --userfs-dir build/userfs/aarch64
       - name: Write a scratch card on EMMC2 and verify it on the host
         if: matrix.profile == 'sdhc-writable'
-        run: tests/run-qemu-sd-write.py --target qemu_raspi4b --size-mib 4096 --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
+        run: tests/run-qemu-storage-write.py --target qemu_raspi4b --size-mib 4096 --out build/debug/qemu_raspi4b/qemu-${{ matrix.profile }}
       - name: Upload raspi4b serial logs and screenshots
         if: always()
         uses: actions/upload-artifact@v7

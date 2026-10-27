@@ -2,11 +2,14 @@
 #ifdef KORAOS_VIRTIO_BLK
 #include "drivers/virtio_blk.h"
 #endif
-#if defined(KORAOS_VIRTIO_BLK) || defined(KORAOS_SD)
+#if defined(KORAOS_VIRTIO_BLK) || defined(KORAOS_SD) || defined(KORAOS_USB_STORAGE)
 #include "mini_uart.h"
 #endif
 #ifdef KORAOS_SD
 #include "drivers/sdhci.h"
+#endif
+#ifdef KORAOS_USB_STORAGE
+#include "drivers/usb_storage.h"
 #endif
 
 extern const unsigned char _koraos_fs_start[];
@@ -209,6 +212,14 @@ void blkdev_init(void) {
     blkdev_t *sd = sdhci_init(&sd_present);
     if (sd != NULL && blkdev_register(sd, BLKDEV_SD) != 0) {
         uart_puts("[blkdev] SD card has no FAT32 volume\r\n");
+    }
+#endif
+#ifdef KORAOS_USB_STORAGE
+    // USB drives found while Circle enumerated (circle_usb_init runs first).
+    for (unsigned i = 0; i < usb_storage_count(); i++) {
+        if (blkdev_register(usb_storage_device(i), BLKDEV_USB) != 0) {
+            uart_puts("[blkdev] USB drive has no FAT32 volume\r\n");
+        }
     }
 #endif
 #ifdef KORAOS_VIRTIO_BLK

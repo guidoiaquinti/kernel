@@ -195,6 +195,17 @@ virt and tests serial fallback. `--disk-writable` negotiates writable test media
 file writes require a writable file descriptor. Use writable media only on
 disposable scratch images.
 
+On raspi3b and raspi4b, `--sd IMAGE` puts a scratch card from
+`tests/create-sd-card-image.py` in the SD slot, and on raspi3b `--usb-stick
+IMAGE` (made with `--label USBSTICK`) plugs it into QEMU's USB next to a QEMU
+USB keyboard. Each drive's steps find its volume, checksum an odd-sized file
+with `sumprobe` from core 0 (where USB interrupts arrive) and from the last
+core, run a program from it, and check that `mkdir` is refused. With
+`--sd-writable` / `--usb-stick-writable` and a `--storage-writable` kernel they
+copy files, make a directory and sync instead; `tests/run-qemu-storage-write.py
+--media sd|usb|both` wraps that and checks each drive on the host afterwards
+with `fsck.fat`, mtools readback and identical FAT copies.
+
 An external disk may contain a bare FAT32 volume or primary MBR FAT32
 partitions. The first supported partition supplies the boot root. To exercise
 partition offsets using a separate scratch image:
@@ -245,7 +256,9 @@ One producer job publishes `koraos.img` and user ELF symbols under a shared
 AArch64 artifact. Consumers download it and use `--userfs-dir` without invoking
 userland compilation or filesystem generation. The all-target job builds four
 Debug kernels, stages both hardware Release payloads into a temporary directory,
-creates a FAT32 SD image, and runs raspi3b smoke. Separate virt profiles cover
+creates a FAT32 SD image, and runs raspi3b smoke. A raspi3b storage job reads
+and writes scratch SD cards and USB drives, and a raspi4b job covers the Pi 4
+kernel with its EMMC2 card. Separate virt profiles cover
 embedded graphics, 128 MiB external disk/keyboard, primary MBR boot, two labeled
 partitions with namespace navigation and assign command lookup, 64 MiB
 serial-only, EL2 entry and writable scratch-root integrity. UART/screenshots are uploaded on failure. Pure host

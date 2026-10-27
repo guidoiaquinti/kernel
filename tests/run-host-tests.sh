@@ -57,6 +57,7 @@ run_test printf src/lib/printf.c
 run_test virt src/platform/virt.c
 run_test placement src/proc/placement.c
 run_test sd src/drivers/sd.c
+run_test readahead src/drivers/readahead.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST)
 run_test kmalloc src/mm/kmalloc.c src/mm/kmalloc_stress.c src/arch/spinlock.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST -pthread)

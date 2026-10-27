@@ -278,7 +278,7 @@ against scratch images. Never against a card that holds firmware until proven.
    Circle's: Circle code stays on core 0, while ours runs in any task under the
    BKL, and its SDHCI core carries over to EMMC2. GPIO 48-53 move from SDHOST
    to the Arasan controller; SDSC and SDHC/SDXC cards, 4-bit bus at 25 MHz,
-   multi-block reads and writes. Writes only with `--sd-writable`. QEMU raspi3b
+   multi-block reads and writes. Writes only with `--storage-writable`. QEMU raspi3b
    tests read a standard and a high-capacity scratch card and write one,
    checked with fsck and mtools on the host.
 2. **SD on Pi 4** (done): the same driver on EMMC2 (`PBASE + 0x340000`,
@@ -286,10 +286,17 @@ against scratch images. Never against a card that holds firmware until proven.
    QEMU's raspi4b models EMMC2 (the card has to be attached to its bus
    explicitly); the `qemu_raspi4b` target (its own PR) keeps the Pi 4 kernel,
    EMMC2 included, tested in CI.
-3. **USB mass storage** through Circle's existing mass storage class driver.
+3. **USB mass storage** (done) through Circle's existing mass storage class
+   driver, on the Pi 3's DWC2 and the Pi 4's xHCI. Filesystem calls reach it
+   from tasks on any core, so Circle now runs in its multi-core mode (USB
+   interrupts stay on core 0). Drives share the SD card's write switch
+   (`--storage-writable`); a read-ahead window softens the FAT32 layer's
+   single-sector transfers. QEMU raspi3b models the DWC2, so CI reads and
+   writes a scratch USB drive. Follow-up: multi-sector transfers in the FAT32
+   layer, which every drive would benefit from.
 
-SD volumes mount read-only by default; writes are enabled explicitly until
-milestone 9 has a track record on real cards.
+SD and USB volumes mount read-only by default; writes are enabled explicitly
+until milestone 9 has a track record on real cards.
 
 ## Milestone 11 – Hotplug
 

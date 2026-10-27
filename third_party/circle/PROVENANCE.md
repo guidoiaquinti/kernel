@@ -38,6 +38,16 @@ closure, which only needed two new headers (`bcm2711.h`, `pci_regs.h`):
   `devicetreeblob` (reads the firmware's device tree; `CMachineInfo` takes the
   PCIe DMA window from it).
 
+Added for USB mass storage (milestone 10), again as the `#include` closure:
+
+- `lib/usb/`: `usbmassdevice` (bulk-only transport, SCSI commands) and
+  `usbfloppydevice` (UFI floppy drives, which the device factory pairs with it).
+- `lib/fs/`: `partitionmanager` and `partition`: the mass storage driver
+  publishes a drive's MBR partitions as Circle devices. KoraOS does not use
+  them; its block layer probes the whole drive itself.
+- `include/circle/`: `fs/fsdef.h` and `new.h` (the heap-typed `new` the
+  driver uses for its DMA bounce buffer, provided by `src/circle/memory.cpp`).
+
 ## What was NOT vendored
 
 Circle's HAL that KoraOS replaces with its own is **not** used: Circle's boot,
@@ -55,9 +65,15 @@ bridge adapters in `src/circle/` (`-DAARCH=64 -DRASPPI=<board> -DSTDLIB_SUPPORT=
 where the board is `RPI_VERSION`). Circle's USB core is built for one host
 controller family, so the Pi 3 build leaves out the xHCI/PCIe/device-tree
 sources and the Pi 4 build leaves out the DWC2 (`dwhci*`) sources.
-Circle's USB device factory is built keyboard-only via `-DEXCLUDE_USB_*` for
-every other class (mouse, gamepads, storage, audio, net, serial, printer,
-bluetooth, midi, touchscreen), so their drivers need not be vendored.
+Circle's USB device factory is built with only the keyboard and mass storage
+drivers via `-DEXCLUDE_USB_*` for every other class (mouse, gamepads, audio,
+net, serial, printer, bluetooth, midi, touchscreen), so their drivers need not
+be vendored.
+
+Circle is built multi-core (`-DARM_ALLOW_MULTI_CORE`): filesystem calls reach
+USB storage from tasks on any core, which Circle supports for USB in that
+mode (real spinlocks, enabled by `circle_usb_init()`, and per-core critical
+sections). Every USB interrupt still goes to core 0.
 
 Circle is built `-mgeneral-regs-only -DKORAOS_INTEGER_ONLY`, like the rest of
 the kernel: FP/SIMD registers belong to EL0 tasks, and Circle code runs in
@@ -69,6 +85,12 @@ interrupt handlers that can interrupt any task.
   and `CString::ftoa` are wrapped in `#ifndef KORAOS_INTEGER_ONLY`, the only
   floating point in the vendored tree (the USB code never formats floats).
   Re-apply when updating the pin.
+
+- `lib/synchronize64.cpp`: in the multi-core `EnterCritical`, the assertion
+  that the caller is not already on `FIQ_LEVEL` is wrapped in
+  `#ifndef KORAOS_NO_FIQ`. KoraOS never uses FIQs and keeps them masked, so
+  a set F bit does not mean FIQ level there; debug builds (QEMU) would
+  otherwise stop at the first critical section. Re-apply when updating the pin.
 
 ## Updating the pin
 

@@ -19,8 +19,17 @@ the firmware's SDHOST controller; on the Pi 4 it drives EMMC2, which the slot
 is wired to. Standard and high-capacity cards work, on a 4-bit bus at
 25 MHz, with multi-block transfers. The card's FAT32 partitions become volumes
 next to the ramdisk, which stays the boot volume. The card is read-only unless
-the kernel is built with `--sd-writable`. Transfers run in the calling task
-under the BKL with interrupts masked, a few hundred microseconds per cluster.
+the kernel is built with `--storage-writable`. Transfers run in the calling
+task under the BKL with interrupts masked.
+
+**USB drives** plugged in at boot register too, through Circle's bulk-only
+mass storage driver behind [`src/circle/usb_storage.cpp`](../src/circle/usb_storage.cpp):
+on the Pi 3's DWC2 and the Pi 4's xHCI ports, and in QEMU raspi3b. Their FAT32
+partitions become volumes like the card's, read-only unless the kernel is
+built with `--storage-writable`. Transfers run in the calling task under the
+BKL, on any core; the task opens interrupts on its core while it waits, since
+USB completions arrive as interrupts on core 0. Single-sector reads are served
+from a 16 KB read-ahead window per drive.
 
 ```
 create-fs-image.sh  ──(mtools)──▶  build/userfs/aarch64/koraos.img  ──(.incbin)──▶  kernel image
@@ -63,8 +72,8 @@ Each layer has a clean seam:
 - **Block device** ([`include/fs/blkdev.h`](../include/fs/blkdev.h)), a
   `blkdev_t` with read/write/flush operations over 512-byte sectors. A registry
   holds up to eight physical backends and four FAT32 primary partitions per
-  backend. Ramdisk, VirtIO and SD register with an explicit backend type; USB
-  mass storage will use the same registration API. Each partition exposes
+  backend. Ramdisk, VirtIO, SD and USB drives register with an explicit backend
+  type. Each partition exposes
   a bounded `blkdev_t` view whose LBA zero is its first sector. Bounds checks
   happen before transport I/O, so reads and writes cannot cross a partition.
 - **FAT32** ([`include/fs/fat32.h`](../include/fs/fat32.h)), per-volume state
@@ -256,9 +265,12 @@ tests/run-fat-namespace-tests.sh
 - **Console input is ASCII.** Kernel names and argv use UTF-8, and compiled
   programs can create Unicode names. Interactive console input currently
   filters non-ASCII bytes. Quotes make names containing ASCII spaces usable.
-- **Pi storage is ramdisk only.** virt supports bare FAT32 and primary MBR
-  FAT32 partitions on a VirtIO disk.
-  No SD/eMMC driver exists.
+- **Pi drives are attached at boot.** The SD card and USB drives present at
+  boot become volumes; there is no hot-plug yet. virt supports bare FAT32 and
+  primary MBR FAT32 partitions on a VirtIO disk.
+- **One sector per transfer.** The FAT32 layer reads and writes single
+  sectors through its cache, which costs most on USB drives (each sector is a
+  USB command; the USB driver reads ahead to soften it).
 - **Primary MBR only.** GPT and extended/logical partitions are unsupported.
   The generated shared userfs remains a bare FAT32 volume.
 - **No VFS.** FAT32 volumes share a namespace and a thin file/fd layer.

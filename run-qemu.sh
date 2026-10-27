@@ -16,9 +16,10 @@ Usage: ./run-qemu.sh [options] [-- QEMU arguments...]
 Environment: KORA_QEMU_TARGET, KORA_QEMU_SMP, KORA_QEMU_RAM, KORA_QEMU_RAMFB,
  KORA_QEMU_KEYBOARD, KORA_QEMU_DISK, KORA_QEMU_DISK_READONLY,
  KORA_QEMU_FB and KORA_QEMU_DISPLAY retain their existing meanings.
- KORA_QEMU_SD=IMAGE puts an SD card in a raspi machine's slot (a QEMU
- snapshot: the image is never changed unless KORA_QEMU_SD_WRITABLE=1; the
- kernel only writes to it when built --sd-writable).
+ KORA_QEMU_SD=IMAGE puts an SD card in a raspi machine's slot, and on raspi3b
+ KORA_QEMU_USB=IMAGE plugs in a USB drive (QEMU snapshots: an image is never
+ changed unless KORA_QEMU_SD_WRITABLE=1 or KORA_QEMU_USB_WRITABLE=1; the
+ kernel only writes to them when built --storage-writable).
 Unrecognized arguments are passed to QEMU unchanged.
 USAGE
 }
@@ -81,6 +82,15 @@ if [[ "$target" == qemu_raspi* ]]; then
             machine_args+=(-drive "if=none,id=sdcard,$card_option"
                 -device sd-card,drive=sdcard,bus=main-system-bus/generic-sdhci/sd-bus)
         fi
+    fi
+    if [[ -n "${KORA_QEMU_USB:-}" ]]; then
+        # QEMU's raspi4b has no PCIe, so no xHCI for the Pi 4's USB ports.
+        [[ "$target" == qemu_raspi3b ]] || fail "KORA_QEMU_USB requires --target qemu_raspi3b"
+        stick=$(normalize_path "$KORA_QEMU_USB")
+        [[ -f "$stick" ]] || fail "Missing USB drive image: $stick"
+        stick_option="if=none,id=stick,format=raw,file=${stick//,/,,}"
+        [[ "${KORA_QEMU_USB_WRITABLE:-0}" == 1 ]] || stick_option+=",snapshot=on"
+        machine_args+=(-drive "$stick_option" -device usb-storage,drive=stick)
     fi
 else
     machine_args=(-M "virt,gic-version=$gic,highmem=off" "${cpu_args[@]}" -smp "$smp" -nic none

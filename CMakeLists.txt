@@ -13,7 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(KORAOS_TARGET "" CACHE STRING "Canonical kernel target")
 set_property(CACHE KORAOS_TARGET PROPERTY STRINGS hw_raspi3b hw_raspi4b qemu_raspi3b qemu_raspi4b qemu_virt)
 set(KORAOS_USERFS_DIR "" CACHE PATH "Prepared shared AArch64 userfs directory")
-option(KORAOS_SD_WRITABLE "Let the kernel write to the SD card (default: read-only)" OFF)
+option(KORAOS_STORAGE_WRITABLE "Let the kernel write to SD cards and USB drives (default: read-only)" OFF)
 set(RPI_VERSION "4" CACHE STRING "Physical Raspberry Pi version (3 or 4)")
 set_property(CACHE RPI_VERSION PROPERTY STRINGS 3 4)
 option(BUILD_QEMU_VARIANT "Build kernel image configured for QEMU" ON)
@@ -246,11 +246,11 @@ function(add_kernel_variant VARIANT)
     if(KVAR_QEMU)
         target_compile_definitions(${target} PRIVATE QEMU_TESTING)
     endif()
-    # The SD card slot: read-only unless built --sd-writable.
+    # The SD card slot and USB drives: read-only unless built --storage-writable.
     if(NOT KVAR_VIRT)
-        target_compile_definitions(${target} PRIVATE KORAOS_SD)
-        if(KORAOS_SD_WRITABLE)
-            target_compile_definitions(${target} PRIVATE KORAOS_SD_WRITABLE)
+        target_compile_definitions(${target} PRIVATE KORAOS_SD KORAOS_USB_STORAGE)
+        if(KORAOS_STORAGE_WRITABLE)
+            target_compile_definitions(${target} PRIVATE KORAOS_STORAGE_WRITABLE)
         endif()
     endif()
 
@@ -393,6 +393,10 @@ function(add_circle_library NAME BOARD)
     target_include_directories(${NAME} PRIVATE "${CIRCLE_DIR}/include" "${INCLUDE_DIR}")
     target_compile_definitions(${NAME} PRIVATE
         RASPPI=${BOARD} RPI_VERSION=${BOARD} DEFAULT_KEYMAP="${KORAOS_KEYMAP}")
+    # USB drives (src/circle/usb_storage.cpp) follow the kernel's write setting.
+    if(KORAOS_STORAGE_WRITABLE)
+        target_compile_definitions(${NAME} PRIVATE KORAOS_STORAGE_WRITABLE)
+    endif()
     target_compile_options(${NAME} PRIVATE
         --target=aarch64-none-elf
         -mcpu=cortex-a72
@@ -405,6 +409,8 @@ function(add_circle_library NAME BOARD)
         # CString's %f path, the one use of floating point (see PROVENANCE.md).
         -mgeneral-regs-only
         -DKORAOS_INTEGER_ONLY
+        # KoraOS never uses FIQs and keeps them masked (see PROVENANCE.md).
+        -DKORAOS_NO_FIQ
         -nostdinc++
         -fno-exceptions
         -fno-rtti
@@ -413,9 +419,14 @@ function(add_circle_library NAME BOARD)
         -DAARCH=64
         # No C standard library underneath Circle here.
         -DSTDLIB_SUPPORT=0
-        # Build only the HID keyboard device driver from Circle's USB device factory;
-        # every other class (mouse, gamepads, storage, audio, net, ...) is excluded so
-        # we do not have to vendor those drivers and their dependencies.
+        # Filesystem calls reach USB storage from tasks on any core, so Circle
+        # runs in its multi-core mode: real spinlocks and per-core critical
+        # sections. Its interrupts still all arrive on core 0.
+        -DARM_ALLOW_MULTI_CORE
+        # Build only the keyboard and mass storage drivers from Circle's USB
+        # device factory; every other class (mouse, gamepads, audio, net, ...)
+        # is excluded so we do not have to vendor those drivers and their
+        # dependencies.
         -DEXCLUDE_USB_AUDIO
         -DEXCLUDE_USB_BLUETOOTH
         -DEXCLUDE_USB_GAMEPAD
@@ -424,7 +435,6 @@ function(add_circle_library NAME BOARD)
         -DEXCLUDE_USB_NET
         -DEXCLUDE_USB_PRINTER
         -DEXCLUDE_USB_SERIAL
-        -DEXCLUDE_USB_STORAGE
         -DEXCLUDE_USB_TOUCHSCREEN
         # Vendored third-party code: do not enforce KoraOS's warning policy on it.
         -Wno-everything

@@ -236,6 +236,10 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends git ca-certificates python3 clang lld llvm cmake make mtools dosfstools qemu-system-arm
       - uses: actions/checkout@v7
+      # The checkout belongs to the runner user but the container runs as
+      # root, so git refuses the tree and the kernel loses its build id.
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/download-artifact@v7
         with:
           name: userfs-aarch64

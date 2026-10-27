@@ -60,8 +60,10 @@ void EnterCritical (unsigned nTargetLevel)
 	u64 nFlags;
 	asm volatile ("mrs %0, daif" : "=r" (nFlags));
 
+#ifndef KORAOS_NO_FIQ	// KoraOS keeps FIQs masked: a set F bit is not FIQ_LEVEL there
 	// if we are already on FIQ_LEVEL, we must not go back to IRQ_LEVEL here
 	assert (nTargetLevel == FIQ_LEVEL || !(nFlags & 0x40));
+#endif
 
 	asm volatile ("msr DAIFSet, #3");	// disable both IRQ and FIQ
 

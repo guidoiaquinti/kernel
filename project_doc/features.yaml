@@ -285,9 +285,9 @@ categories:
         prs: [63, 64]
       - id: usb-mass-storage
         name: USB mass storage
-        status: planned
+        status: in_progress
         description: USB sticks and drives as volumes.
-        platforms: [rpi3, rpi4]
+        platforms: [rpi3, rpi4, qemu-raspi3b]
         milestone: 10
 
   - id: display

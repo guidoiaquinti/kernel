@@ -12,5 +12,5 @@
 // Returns the card as a block device, or NULL with *present false if no card
 // answers, or NULL with *present true if a card answered but could not be
 // brought up. The device is read-only unless the kernel is built with
-// KORAOS_SD_WRITABLE (./build.sh --sd-writable).
+// KORAOS_STORAGE_WRITABLE (./build.sh --storage-writable).
 blkdev_t *sdhci_init(bool *present);

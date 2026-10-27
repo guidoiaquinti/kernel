@@ -100,11 +100,11 @@ void kernel_main(uintptr_t dtb) {
   // Circle stay on this core.
   smp_start_secondaries();
 
-  // Bring up the vendored Circle USB stack on the KoraOS HAL bridge. Enumeration
-  // talks to real USB hardware, which QEMU's raspi3b does not emulate, so only
-  // the hardware build initializes and scans for a keyboard.
+  // Bring up the vendored Circle USB stack on the KoraOS HAL bridge and
+  // enumerate a keyboard and storage drives. QEMU's raspi3b models the Pi 3's
+  // USB controller; its raspi4b has no PCIe, so no xHCI to enumerate.
 #ifndef KORAOS_VIRT
-#ifdef QEMU_TESTING
+#if defined(QEMU_TESTING) && RPI_VERSION == 4
   circle_usb_init(0);
 #else
   circle_usb_init(1);

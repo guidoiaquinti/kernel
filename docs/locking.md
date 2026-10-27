@@ -87,6 +87,8 @@ Take locks only in this order (a lock may be skipped, never taken backwards):
    calls, `uart_puts`, the debug console's prompt and echo, and the screen
    terminal's serial copy of each `write`), so lines from different cores
    never mix mid-line; bypassed while panicking
+9. `circle timers` (`src/circle/timer.cpp`): Circle's kernel timers, started
+   on any core and fired by core 0's tick (see Circle below)
 
 A task blocks by marking itself blocked under `sched` before it drops the BKL,
 and a wait queue sleeper is queued before it releases the condition's lock, so
@@ -94,9 +96,18 @@ no wake-up can fall between checking a condition and sleeping.
 
 ## Circle
 
-The vendored Circle USB stack is built single-core (`ARM_ALLOW_MULTI_CORE`
-off): its own critical sections only mask IRQs on the local core. That is
-enough because Circle runs only on core 0 (its interrupts are routed there,
-and nothing calls it from other cores), and everything it shares with the rest
-of the kernel (the heap, the frame allocator, the input queue, the IRQ table)
-is protected by the locks above.
+The vendored Circle USB stack is built multi-core (`ARM_ALLOW_MULTI_CORE`):
+filesystem calls reach USB storage from tasks on any core, holding the BKL, so
+Circle's own spinlocks are real spinlocks (with IRQs masked on the local core,
+and enabled by `circle_usb_init()`) and its critical sections are per core.
+Every USB interrupt still goes to core 0, so a task waiting for a transfer
+opens IRQs on its own core meanwhile (a caller on core 0 would otherwise wait
+for its own completion interrupt).
+
+Circle's spinlocks come after the BKL and before `tty input`: Circle code
+holding one may allocate (`heap`, `frames`), log (`printf`), feed the keyboard
+into `tty input`, or start a kernel timer. The timer bridge's table
+(`circle timers`, `src/circle/timer.cpp`) is a leaf lock; timer handlers run
+without it. Everything else Circle shares with the rest of the kernel (the
+heap, the frame allocator, the input queue, the IRQ table) is protected by the
+locks above.

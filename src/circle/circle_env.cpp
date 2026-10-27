@@ -2,9 +2,9 @@
 //
 // Construction and bring-up of the vendored Circle USB stack on the KoraOS HAL
 // bridge: the host controller for this board (CUSBHCIDevice is the DWC2 on the
-// Pi 3, the xHCI behind PCIe on the Pi 4), device enumeration, and the USB
-// keyboard feeding the tty. Enumeration needs real hardware (QEMU has no Pi
-// USB), so the caller gates it with `enumerate`.
+// Pi 3, the xHCI behind PCIe on the Pi 4), device enumeration, the USB
+// keyboard feeding the tty and the mass storage drives for the block layer.
+// QEMU's raspi4b has no PCIe, so the caller gates enumeration with `enumerate`.
 
 #include "circle_env.h"
 
@@ -12,10 +12,12 @@
 #include <circle/interrupt.h>
 #include <circle/logger.h>
 #include <circle/machineinfo.h>
+#include <circle/spinlock.h>
 #include <circle/timer.h>
 #include <circle/usb/usbhcidevice.h>
 #include <circle/usb/usbkeyboard.h>
 
+#include "drivers/usb_storage.h"
 #include "mm/mmu.h"
 #include "tty.h"
 
@@ -64,6 +66,10 @@ void key_status_raw(unsigned char ucModifiers, const unsigned char RawKeys[6]) {
 }  // namespace
 
 void circle_usb_init(int enumerate) {
+    // Circle is built multi-core (filesystem calls reach USB storage from any
+    // core): its spinlocks only lock once enabled.
+    CSpinLock::Enable();
+
     // Constructed once, with static storage duration. Order matters: name
     // service and interrupt system first, then logger and timer, then the USB
     // host controller that depends on them. bPlugAndPlay = FALSE so Initialize()
@@ -117,6 +123,7 @@ void circle_usb_init(int enumerate) {
         tfp_printf("circle: USB host controller init FAILED\n");
         return;
     }
+    usb_storage_collect();
 
     CUSBKeyboardDevice *pKeyboard =
         (CUSBKeyboardDevice *)DeviceNameService.GetDevice("ukbd", 1, FALSE);

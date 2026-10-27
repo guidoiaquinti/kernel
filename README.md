@@ -5,8 +5,9 @@
 KoraOS is a bare-metal AArch64 kernel for Raspberry Pi 3/4 and QEMU
 (`raspi3b` and `virt`). It runs an EL0 shell and utilities from a FAT32 user
 filesystem with volume paths, assigns and file management tools. Writable
-VirtIO media supports create, copy, append, truncate, rename and removal; the
-embedded ramdisk remains read-only. Read the [Manifesto](MANIFESTO.md) for the project's direction.
+VirtIO media supports create, copy, append, truncate, rename and removal; on the
+Pis the SD card and USB drives are volumes too (writable with
+`--storage-writable`), and the embedded ramdisk remains read-only. Read the [Manifesto](MANIFESTO.md) for the project's direction.
 
 ## Quick start
 

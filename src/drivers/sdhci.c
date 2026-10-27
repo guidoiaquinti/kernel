@@ -276,7 +276,7 @@ static int sd_read(blkdev_t *dev, uint32_t lba, uint32_t count, void *buf) {
     return transfer(lba, count, buf, false);
 }
 
-#ifdef KORAOS_SD_WRITABLE
+#ifdef KORAOS_STORAGE_WRITABLE
 static int sd_write(blkdev_t *dev, uint32_t lba, uint32_t count, const void *buf) {
     (void)dev;
     return transfer(lba, count, (void *)buf, true);
@@ -426,7 +426,7 @@ blkdev_t *sdhci_init(bool *present) {
 
     uint32_t sectors = card.sectors > 0xffffffffu ? 0xffffffffu : (uint32_t)card.sectors;
     card.dev = (blkdev_t){.read = sd_read, .sector_count = sectors, .ctx = &card,
-#ifdef KORAOS_SD_WRITABLE
+#ifdef KORAOS_STORAGE_WRITABLE
                           .write = sd_write, .flush = sd_flush, .read_only = false,
 #else
                           .read_only = true,

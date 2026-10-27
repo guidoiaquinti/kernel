@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build a disposable SD card image for QEMU raspi3b from a copy of the shared userfs.
+"""Build a disposable SD card (or USB drive) image for QEMU from a copy of the shared userfs.
 
-The card holds one MBR partition: the userfs volume relabelled SDCARD, plus
+The card holds one MBR partition: the userfs volume relabelled SDCARD (or
+another --label, e.g. USBSTICK for a QEMU usb-storage drive), plus
 README.TXT (a marker) and BIG.BIN (deterministic bytes, large enough for
 multi-block reads). QEMU wants SD card images sized to a power of two, so the
 image is padded (sparsely) to 64 MiB, which QEMU presents as a standard
@@ -22,7 +23,7 @@ mbr_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mbr_image)
 
 CARD_MIB = (64, 4096)  # standard (byte-addressed) and high capacity in QEMU
-MARKER = "SD card marker: read through the SDHCI driver.\n"
+MARKER = "Storage marker: read through the SD or USB driver.\n"
 BIG_BYTES = 300 * 1024 + 123  # not a whole number of sectors or clusters
 
 
@@ -39,7 +40,7 @@ def fnv1a64(data):
     return h
 
 
-def create_image(source, output, mib=64):
+def create_image(source, output, mib=64, label="SDCARD"):
     source, output = Path(source), Path(output)
     if source.resolve() == output.resolve():
         raise ValueError("card image must be separate from shared userfs")
@@ -47,7 +48,7 @@ def create_image(source, output, mib=64):
     with tempfile.TemporaryDirectory(prefix="kora-sd-fixture-") as temporary:
         volume = Path(temporary) / "sdcard.img"
         shutil.copyfile(source, volume)
-        subprocess.run(["mlabel", "-i", str(volume), "::SDCARD"], check=True)
+        subprocess.run(["mlabel", "-i", str(volume), "::" + label], check=True)
         marker = Path(temporary) / "readme.txt"
         marker.write_text(MARKER)
         big = Path(temporary) / "big.bin"
@@ -63,7 +64,7 @@ def create_image(source, output, mib=64):
         stream.truncate(mib * 1024 * 1024)
     if hashlib.sha256(source.read_bytes()).digest() != before:
         raise RuntimeError("shared userfs changed during SD fixture generation")
-    print("created SD card image %s (%d MiB, SDCARD partition); shared userfs preserved" % (output, mib))
+    print("created image %s (%d MiB, %s partition); shared userfs preserved" % (output, mib, label))
 
 
 def main():
@@ -71,9 +72,10 @@ def main():
     parser.add_argument("source")
     parser.add_argument("--output", required=True)
     parser.add_argument("--size-mib", type=int, choices=CARD_MIB, default=64)
+    parser.add_argument("--label", default="SDCARD", help="volume label (default SDCARD)")
     args = parser.parse_args()
     try:
-        create_image(args.source, args.output, args.size_mib)
+        create_image(args.source, args.output, args.size_mib, args.label)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.error(str(error))
 

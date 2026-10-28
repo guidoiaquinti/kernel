@@ -295,6 +295,12 @@ against scratch images. Never against a card that holds firmware until proven.
    writes a scratch USB drive. Follow-up: multi-sector transfers in the FAT32
    layer, which every drive would benefit from.
 
+4. **Ramdisk** (done): optional and read-write, sized at build time
+   (`./build.sh --ramdisk 16M`, up to `1G` and more on a Pi 4), laid out in RAM
+   at boot from the used parts the kernel embeds. Without one, the kernel boots
+   from the first volume with `/bin/init`, and the install puts the programs
+   on the SD card.
+
 SD and USB volumes mount read-only by default; writes are enabled explicitly
 until milestone 9 has a track record on real cards.
 

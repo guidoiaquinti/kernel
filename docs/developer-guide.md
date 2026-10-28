@@ -56,6 +56,17 @@ Run `./build.sh` at least once. CMake writes `build/compile_commands.json`, whic
 ./build.sh --target all
 ```
 
+`--ramdisk SIZE` (e.g. `16M`, `512M`, `1G`; K, M or G) embeds a read-write
+ramdisk holding the user programs and files, which becomes the boot volume.
+The kernel image only grows by the used parts (a few hundred KB, even for
+`1G`): the volume is laid out in RAM at boot, past the page pool, and its
+changes last until the machine stops. A Pi 3 build refuses `1G` (1 GB of RAM
+in all); the kernel reports at boot if a ramdisk does not fit. Without
+`--ramdisk` the kernel boots from the first volume that has `/bin/init`: on a
+Pi the SD card (the install copies the programs onto it) or a USB drive, on
+virt a VirtIO disk. For QEMU raspi runs without a disk, build with
+`--ramdisk 16M`.
+
 No target argument means all five. Repeated selections are deduplicated in
 first-seen order. `--debug` (default) or `--release` applies to selected kernel
 configurations. Each has its own cache and `kernel.elf`, `kernel.img`, and
@@ -90,8 +101,8 @@ builds.
 ## Running QEMU
 
 ```bash
-./run-qemu.sh --target qemu_raspi3b
-./run-qemu.sh --target qemu_raspi4b
+./build.sh --target qemu_raspi3b --ramdisk 16M && ./run-qemu.sh --target qemu_raspi3b
+KORA_QEMU_SD=build/sd-card.img ./run-qemu.sh --target qemu_raspi4b   # no ramdisk: boot from a card
 ./run-qemu.sh --target qemu_virt
 KORA_QEMU_FB=1 ./run-qemu.sh --target qemu_virt
 ./run-qemu.sh --target qemu_virt --release --build-dir my-build -s -S
@@ -133,7 +144,10 @@ build roots and configuration flags.
 ```
 
 All selected builds must succeed before installation starts. Only selected
-hardware targets are installed, with firmware, DTBs, config and licence. Existing
+hardware targets are installed, with firmware, DTBs, config and licence, plus
+the user programs and files (`bin/`, `docs/`, `README.TXT`): a kernel built
+without `--ramdisk` boots from the card's volume that has `/bin/init`.
+`create-sd-image.sh` puts them in its image too. Existing
 boot filenames remain `kernel8-rpi3.img` and `kernel8-rpi4.img`. Building alone
 does not copy anything to an external volume. Low-level hardware configurations
 retain `install_hw`, using their cached `BOOTMNT` destination.
@@ -203,9 +217,11 @@ to the debug console. Pi USB layouts still use the Circle keymap setting.
 
 An external disk uses modern VirtIO MMIO and defaults to read-only media.
 `KORA_QEMU_DISK_READONLY=off` enables FAT32 file writes on a supplied disposable
-image; the embedded ramdisk stays read-only. Never enable writes on the shared
-`build/userfs/aarch64/koraos.img` artifact or a card containing Pi firmware. A missing disk uses embedded userfs;
-a configured broken disk does not silently fall back. See `filesystem.md`.
+image. Never enable writes on the shared
+`build/userfs/aarch64/koraos.img` artifact or a card containing Pi firmware. A
+configured disk is the boot volume; a broken one does not silently fall back to
+the ramdisk. Without a disk, a kernel built `--ramdisk` boots from it. See
+`filesystem.md`.
 
 For an end-to-end write test, install dosfstools (`fsck.fat`) alongside mtools:
 
@@ -226,9 +242,9 @@ console input currently accepts ASCII; quotes handle spaces in ASCII paths.
 
 The Pi kernels read the SD card through the SoC's SDHCI controller (the
 Arasan controller on the Pi 3, EMMC2 on the Pi 4): the
-card's FAT32 partitions show up in `volumes` next to the ramdisk, which stays
-the boot volume. On hardware that is the boot card, so its `KORAOS` partition
-becomes browsable. The card is **read-only** unless the kernel is built with
+card's FAT32 partitions show up in `volumes` next to the ramdisk, if there is
+one. On hardware that is the boot card, so its `KORAOS` partition becomes
+browsable, and without a ramdisk it is the boot volume. The card is **read-only** unless the kernel is built with
 `--storage-writable` (alias `--sd-writable`); keep it that way for a card with
 Pi firmware on it.
 
@@ -255,7 +271,9 @@ tests/run-qemu-storage-write.py
 
 USB sticks and drives plugged in at boot work through Circle's mass storage
 (bulk-only) driver, on any port the keyboard works on. Each drive's FAT32
-partitions show up in `volumes` next to the ramdisk and the SD card. Drives
+partitions show up in `volumes` next to the ramdisk and the SD card, and
+without a ramdisk or a card with `/bin/init` a drive can be the boot volume.
+Drives
 are **read-only** unless the kernel is built with `--storage-writable`, the
 same flag as the SD card. Drives must use 512-byte sectors and be at most
 2 TB; GPT and exFAT are not supported (as for any volume). The FAT32 layer

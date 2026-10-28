@@ -66,11 +66,14 @@ int blkdev_read(blkdev_t *dev, uint32_t lba, uint32_t count, void *buf);
 int blkdev_write(blkdev_t *dev, uint32_t lba, uint32_t count, const void *buf);
 int blkdev_flush(blkdev_t *dev);
 
-// Register embedded ramdisk and optional VirtIO. Until multi-volume FAT32 lands,
-// legacy calls use the first external partition, or embedded root if absent.
-// A configured broken external root never silently falls back to the ramdisk.
+// Register the ramdisk (if built with one), the SD card, USB drives and a
+// VirtIO disk. The root is a configured VirtIO disk (a broken one never falls
+// back to anything else), else the ramdisk; with neither, blkdev_root() is NULL
+// and blkdev_root_search() true: the boot volume is the first volume that has
+// /bin/init (fs_mount_registered_search). Legacy blk_* calls use the root.
 void blkdev_init(void);
 blkdev_t *blkdev_root(void);
+bool blkdev_root_search(void);
 int blk_read(uint32_t lba, uint32_t count, void *buf);
 int blk_write(uint32_t lba, uint32_t count, const void *buf);
 int blk_flush(void);

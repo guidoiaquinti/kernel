@@ -254,7 +254,8 @@ def storage_steps(q, what, label, writable, cores):
 
     def volume():
         q.send("volumes\r")
-        m = q.expect(rb"^(df\d+): " + label.lower().encode() + rb"( \[read-only\])?\r?\n")
+        # The boot volume, without a ramdisk, may be this drive's.
+        m = q.expect(rb"^(df\d+): " + label.lower().encode() + rb"(?: \[boot\])?( \[read-only\])?\r?\n")
         q.expect(PROMPT)
         device.append(m.group(1).decode())
         if (m.group(2) is None) != writable:
@@ -1034,7 +1035,9 @@ def main():
     parser.add_argument("--repeat", type=int, default=0, help="repeat the EL0 page/malloc/nested-process probe")
     parser.add_argument("--stress", type=int, default=0,
                         help="rounds of the thread, kill and demo steps to repeat at the end")
-    parser.add_argument("--expect-root-failure", action="store_true", help="require a configured disk mount failure")
+    parser.add_argument("--expect-root-failure", action="store_true",
+                        help="require a boot failure: a configured disk that does not mount, or (without "
+                             "--disk) a kernel without a ramdisk finding no volume with /bin/init")
     parser.add_argument("--keyboard", action="store_true", help="inject keys through a VirtIO keyboard")
     parser.add_argument("--disk", help="external bare FAT32 or MBR FAT32 disk for virt")
     parser.add_argument("--multi-volume", action="store_true", help="require scratch BOOT/EXTRAS partitions")
@@ -1044,6 +1047,9 @@ def main():
     parser.add_argument("--sd", help="raspi3b/raspi4b: SD card image (tests/create-sd-card-image.py)")
     parser.add_argument("--sd-writable", action="store_true",
                         help="attach the card writable; the kernel must be built --storage-writable")
+    parser.add_argument("--ramdisk", type=int, metavar="MB",
+                        help="the kernel was built --ramdisk with this many MB: check it, and write to it "
+                             "when it is the root")
     parser.add_argument("--usb-stick", help="raspi3b: USB drive image (tests/create-sd-card-image.py --label USBSTICK)")
     parser.add_argument("--usb-stick-writable", action="store_true",
                         help="attach the USB drive writable; the kernel must be built --storage-writable")
@@ -1072,8 +1078,6 @@ def main():
         parser.error("--write-test requires virt, --disk and --disk-writable")
     if args.multi_volume and not args.disk:
         parser.error("--multi-volume requires --disk")
-    if args.expect_root_failure and not args.disk:
-        parser.error("--expect-root-failure requires --disk")
 
     if args.kernel is None:
         args.kernel = os.path.join(kernel_dir, "kernel.img")
@@ -1153,8 +1157,6 @@ def main():
             print("FAIL - kernel boots (heap self-test): %s" % e)
             print("qemu smoke: FAILED (artifacts in %s)" % args.out)
             sys.exit(1)  # QEMU is still stopped by the finally below
-        if args.disk:
-            q.expect(rb"\[blkdev\] using VirtIO disk")
         if args.usb_stick:
             # Circle enumerates before the block layer comes up.
             m = q.expect(rb"^\[usb\] drive umsd1: (\d+) MB, (read-only|writable)")
@@ -1164,6 +1166,14 @@ def main():
             if m.groups() != want:
                 raise Failure("USB drive line %r, want %s" % (m.group(0), want))
             print("ok   - USB drive: %s MB, %s" % (m.group(1).decode(), m.group(2).decode()))
+        if args.ramdisk:
+            # After Circle's USB lines, before the SD card and VirtIO probes.
+            m = q.expect(rb"^\[ramdisk\] (\d+) MB at 0x[0-9a-f]+, read-write")
+            if int(m.group(1)) != args.ramdisk:
+                raise Failure("a %s MB ramdisk, want %d MB" % (m.group(1).decode(), args.ramdisk))
+            print("ok   - %d MB ramdisk laid out, read-write" % args.ramdisk)
+        if args.disk:
+            q.expect(rb"\[blkdev\] using VirtIO disk")
         if args.machine.startswith("raspi"):
             # The SD slot: a card announces itself, an empty slot says so.
             m = q.expect(rb"^\[sd\] (no card|(SDSC|SDHC/SDXC) card, (\d+) MB, (read-only|writable))")
@@ -1176,6 +1186,11 @@ def main():
                 if (m.group(2), m.group(3), m.group(4)) != want:
                     raise Failure("SD card line %r, want %s" % (m.group(1), want))
             print("ok   - SD slot: %s" % m.group(1).decode())
+        if args.expect_root_failure and not args.disk:
+            q.expect(rb"fat32: no volume has /bin/init")
+            q.expect(rb"kernel: failed to load /bin/init")
+            print("ok   - without a ramdisk or a volume with /bin/init, boot stops with a message")
+            return
         if args.expect_root_failure:
             q.expect(rb"fat32: mount failed:")
             q.expect(rb"kernel: failed to load /bin/init")
@@ -1186,7 +1201,8 @@ def main():
         media = ([("SD card", "SDCARD", args.sd_writable)] if args.sd else []) + \
             ([("USB drive", "USBSTICK", args.usb_stick_writable)] if args.usb_stick else [])
         for name, check in run(q, not args.no_graphics, args.keyboard, args.repeat, args.multi_volume,
-                               args.write_test, cores, args.stress, media):
+                               args.write_test or (args.ramdisk and not args.disk), cores, args.stress,
+                               media):
             try:
                 check()
                 print("ok   - " + name)

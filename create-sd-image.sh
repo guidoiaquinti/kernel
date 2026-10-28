@@ -8,6 +8,8 @@ Usage: ./create-sd-image.sh [options]
   --target NAME       Repeatable: hw_raspi3b, hw_raspi4b or all (default: both)
   --debug | --release Kernel configuration (default: Debug)
   --build-dir DIR     Build root, as in build.sh
+  --userfs-dir DIR    Shared userfs whose programs and files go on the card
+                      (default: BUILD_ROOT/userfs/aarch64)
   --staging DIR       Consume an existing complete boot payload instead
   --output FILE       Image path (default: BUILD_ROOT/koraos-boot.img)
   --volume LABEL      FAT label (default: KORAOS; up to 11 ASCII characters)
@@ -25,6 +27,7 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 build_root="${BUILD_DIR:-$script_dir/build}"
 build_type="${BUILD_TYPE:-Debug}"
 staging_source=""
+userfs_dir=""
 image_path=""
 kernel_source=""
 volume_label=KORAOS
@@ -44,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --release) build_type=Release; shift ;;
         --build-dir) require_value "$@"; build_root="$2"; shift 2 ;;
         -s|--staging) require_value "$@"; staging_source="$2"; shift 2 ;;
+        --userfs-dir) require_value "$@"; userfs_dir="$2"; shift 2 ;;
         -o|--output) require_value "$@"; image_path="$2"; shift 2 ;;
         --kernel) require_value "$@"; kernel_source="$2"; shift 2 ;;
         --volume) require_value "$@"; volume_label="$2"; shift 2 ;;
@@ -94,6 +98,8 @@ else
         done
     fi
     for file in "${kernel_files[@]}"; do [[ -s "$file" && -f "$file" ]] || fail "Missing hardware kernel: $file; build first"; done
+    userfs_image="$(normalize_path "${userfs_dir:-$build_root/userfs/aarch64}")/koraos.img"
+    [[ -s "$userfs_image" && -f "$userfs_image" ]] || fail "Missing shared userfs: $userfs_image; build first"
 fi
 # Both board generations' firmware is retained, just as install_hw does.
 for file in bootcode.bin start.elf start4.elf fixup.dat fixup4.dat LICENCE.broadcom \
@@ -114,6 +120,9 @@ if [[ -z "$staging_source" ]]; then
     for ((i = 0; i < ${#kernel_files[@]}; i++)); do
         cp "${kernel_files[i]}" "$stage_temp/${kernel_names[i]}"
     done
+    # The user programs and files: a kernel without a ramdisk boots from the
+    # card's volume that has /bin/init.
+    LC_ALL=C.UTF-8 mcopy -s -n -Q -i "$userfs_image" "::/*" "$stage_temp/"
     if [[ -z "$kernel_source" ]]; then
         cp "$script_dir/config.txt" "$stage_temp/config.txt"
     else

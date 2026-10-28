@@ -200,10 +200,12 @@ int fs_namespace_reset(void) {
     return error;
 }
 
-int fs_mount_registered(blkdev_t *boot) {
+// Mount every registered partition. The boot volume is `boot`'s, or with
+// `probe` the first volume that has a file at that path.
+static int mount_all(blkdev_t *boot, const char *probe) {
     int reset_rc = fs_namespace_reset();
     if (reset_rc != 0) return reset_rc;
-    int boot_error = FS_ERR_NOFS;
+    int boot_error = probe != NULL ? FS_ERR_NOTFOUND : FS_ERR_NOFS;
     for (unsigned i = 0; i < blkdev_partition_count(); i++) {
         blkdev_t *dev = blkdev_partition_io(i);
         fat32_volume_t *volume;
@@ -213,6 +215,10 @@ int fs_mount_registered(blkdev_t *boot) {
         }
         if (rc != 0) {
             continue;
+        }
+        fat32_stat_t st;
+        if (probe != NULL && boot == NULL && fat32_stat(volume, probe, &st) == 0 && !st.is_dir) {
+            boot = dev;
         }
         fs_volume_info_t *info = &volumes[volume_count++];
         info->volume = volume;
@@ -253,6 +259,14 @@ int fs_mount_registered(blkdev_t *boot) {
         fs_namespace_reset();
     }
     return rc;
+}
+
+int fs_mount_registered(blkdev_t *boot) {
+    return mount_all(boot, NULL);
+}
+
+int fs_mount_registered_search(const char *probe) {
+    return mount_all(NULL, probe);
 }
 
 unsigned fs_volume_count(void) {

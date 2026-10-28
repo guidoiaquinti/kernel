@@ -40,6 +40,10 @@ int fs_assign_set(const fs_cwd_t *cwd, const char *name, const char *target);
 // Boot/test initialization only. Mounts every valid registered view. Boot must
 // identify the exact preferred view; NULL or an invalid boot fails closed.
 int fs_mount_registered(blkdev_t *boot);
+// As above, with the first mounted volume (in registration order) that has a
+// file at `probe` (e.g. "/bin/init") as the boot volume; FS_ERR_NOTFOUND if
+// none has.
+int fs_mount_registered_search(const char *probe);
 // Reject live tasks/handles and retain registry/assign ownership on sync error.
 int fs_namespace_reset(void);
 unsigned fs_volume_count(void);

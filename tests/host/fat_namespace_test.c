@@ -15,7 +15,6 @@ void *malloc(size_t);
 void free(void *);
 int posix_memalign(void **, size_t, size_t);
 int snprintf(char *, size_t, const char *, ...);
-const unsigned char _koraos_fs_start[512] = {0}, _koraos_fs_end[1] = {0};
 int test_failures, test_checks;
 static const char *directory;
 static unsigned allocations, writes, flushes;

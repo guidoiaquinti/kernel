@@ -1,0 +1,25 @@
+name: Rebuild website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'project_doc/features.yaml'
+      - 'docs/**'
+      - 'MANIFESTO.md'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: website-rebuild
+  cancel-in-progress: true
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare Pages build
+        env:
+          HOOK: ${{ secrets.CF_PAGES_DEPLOY_HOOK }}
+        run: curl -fsS -X POST "$HOOK"

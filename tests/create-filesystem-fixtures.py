@@ -28,6 +28,45 @@ def root_entries(image):
     return range(start, start + spc * SECTOR, 32)
 
 
+DELETED = b"\xe5" + bytes(31)
+
+
+def set_fat(image, cluster, value):
+    reserved, fatsz, _, _ = geometry(image)
+    for fat in range(image[16]):
+        struct.pack_into("<I", image, (reserved + fat * fatsz) * SECTOR + cluster * 4, value)
+
+
+def open_root(image):
+    """Replace the root cluster's end-of-directory marker with deleted entries."""
+    image = bytearray(image)
+    for offset in root_entries(image):
+        if image[offset] == 0:
+            image[offset:offset + 32] = DELETED
+    return image
+
+
+def long_root(image, label_cluster, label, chain=400):
+    """Continue the root directory over a chain whose links hop between 16 FAT
+    sectors, so a walk restarted from the root cluster misses the sector cache."""
+    image = open_root(image)
+    reserved, _, data, spc = geometry(image)
+    root = struct.unpack_from("<I", image, 44)[0]
+    clusters = [128 * (1 + index % 16) + 64 + index // 16 for index in range(chain)]
+    for cluster in clusters:
+        if struct.unpack_from("<I", image, reserved * SECTOR + cluster * 4)[0]:
+            raise RuntimeError("long-root cluster already allocated")
+    for current, following in zip([root] + clusters, clusters + [0x0fffffff]):
+        set_fat(image, current, following)
+    for index, cluster in enumerate(clusters):
+        entries = [DELETED] * (spc * SECTOR // 32)
+        if index == label_cluster:
+            entries[0] = label.ljust(11).encode() + b"\x08" + bytes(20)
+        start = (data + (cluster - 2) * spc) * SECTOR
+        image[start:start + spc * SECTOR] = b"".join(entries)
+    return image
+
+
 def make_fixture(output, label, size, text, temporary):
     with output.open("wb") as stream:
         stream.truncate(size * 1024 * 1024)
@@ -116,6 +155,14 @@ def create_fixtures(directory):
                 break
         fallback[71:82] = b"FALLBACK   "
         (directory / "bpb-label.img").write_bytes(fallback)
+        (directory / "deep-label.img").write_bytes(long_root(fallback, 399, "DEEP"))
+        (directory / "late-label.img").write_bytes(long_root(fallback, 2, "LATE"))
+        root = struct.unpack_from("<I", fallback, 44)[0]
+        root_loop, root_bad_chain = open_root(fallback), open_root(fallback)
+        set_fat(root_loop, root, root)
+        set_fat(root_bad_chain, root, 0x0ffffff7)
+        (directory / "root-loop.img").write_bytes(root_loop)
+        (directory / "root-bad-chain.img").write_bytes(root_bad_chain)
         boundary = directory / "boundary.img"
         shutil.copyfile(directory / "alpha.img", boundary)
         run("mlabel", "-i", str(boundary), "::LONGVOLUME1")

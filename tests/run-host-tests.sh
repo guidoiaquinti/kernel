@@ -49,6 +49,7 @@ run_test() {
 
 python3 "$ROOT/tests/check-syscall-abi.py" || failed=1
 python3 "$ROOT/tests/run-write-image-tests.py" || failed=1
+python3 "$ROOT/tests/run-ramdisk-image-tests.py" || failed=1
 run_test cp
 run_test shell_input
 run_test blkdev src/fs/blkdev.c
@@ -58,6 +59,7 @@ run_test virt src/platform/virt.c
 run_test placement src/proc/placement.c
 run_test sd src/drivers/sd.c
 run_test readahead src/drivers/readahead.c
+run_test ramdisk_image src/fs/ramdisk_image.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST)
 run_test kmalloc src/mm/kmalloc.c src/mm/kmalloc_stress.c src/arch/spinlock.c
 TEST_FLAGS=(-DKORAOS_HOST_TEST -pthread)

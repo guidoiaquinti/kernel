@@ -2,8 +2,12 @@
 #ifdef KORAOS_VIRTIO_BLK
 #include "drivers/virtio_blk.h"
 #endif
-#if defined(KORAOS_VIRTIO_BLK) || defined(KORAOS_SD) || defined(KORAOS_USB_STORAGE)
+#if defined(KORAOS_VIRTIO_BLK) || defined(KORAOS_SD) || defined(KORAOS_USB_STORAGE) || \
+    defined(KORAOS_RAMDISK)
 #include "mini_uart.h"
+#endif
+#ifdef KORAOS_RAMDISK
+#include "fs/ramdisk.h"
 #endif
 #ifdef KORAOS_SD
 #include "drivers/sdhci.h"
@@ -12,14 +16,11 @@
 #include "drivers/usb_storage.h"
 #endif
 
-extern const unsigned char _koraos_fs_start[];
-extern const unsigned char _koraos_fs_end[];
-
 static blkdev_device_t devices[BLKDEV_MAX_DEVICES];
 static blkdev_partition_t partitions[BLKDEV_MAX_PARTITIONS];
 static unsigned device_count, partition_count;
-static blkdev_t ramdisk;
 static blkdev_t *active;
+static bool root_search;
 
 static uint32_t rd16(const uint8_t *p) {
     return p[0] | ((uint32_t)p[1] << 8);
@@ -159,6 +160,7 @@ static int probe(blkdev_device_t *device) {
 void blkdev_registry_reset(void) {
     device_count = partition_count = 0;
     active = NULL;
+    root_search = false;
 }
 
 int blkdev_register(blkdev_t *backend, blkdev_type_t type) {
@@ -188,26 +190,21 @@ blkdev_t *blkdev_partition_io(unsigned index) {
     return index < partition_count ? &partitions[index].dev : NULL;
 }
 
-static int ramdisk_read(blkdev_t *dev, uint32_t lba, uint32_t count, void *buf) {
-    const uint8_t *base = dev->ctx;
-    int rc = check_range(dev, lba, count, buf);
-    if (rc || !count) return rc;
-    uint8_t *dst = buf;
-    const uint8_t *src = base + (uint64_t)lba * BLK_SECTOR_SIZE;
-    for (size_t i = 0; i < (size_t)count * BLK_SECTOR_SIZE; i++) dst[i] = src[i];
-    return 0;
-}
-
 void blkdev_init(void) {
     blkdev_registry_reset();
-    size_t bytes = (size_t)(_koraos_fs_end - _koraos_fs_start);
-    ramdisk = (blkdev_t){.read = ramdisk_read, .read_only = true,
-                        .sector_count = (uint32_t)(bytes / BLK_SECTOR_SIZE),
-                        .ctx = (void *)_koraos_fs_start};
-    if (!blkdev_register(&ramdisk, BLKDEV_RAMDISK)) active = &partitions[0].dev;
+#ifdef KORAOS_RAMDISK
+    blkdev_t *rd = ramdisk_init();
+    if (rd != NULL) {
+        unsigned first = partition_count;
+        if (blkdev_register(rd, BLKDEV_RAMDISK) == 0) {
+            active = &partitions[first].dev;
+        } else {
+            uart_puts("[blkdev] ramdisk has no FAT32 volume\r\n");
+        }
+    }
+#endif
 #ifdef KORAOS_SD
-    // The card's FAT32 partitions become volumes next to the ramdisk, which
-    // stays the boot volume.
+    // The card's FAT32 partitions become volumes next to the ramdisk.
     bool sd_present = false;
     blkdev_t *sd = sdhci_init(&sd_present);
     if (sd != NULL && blkdev_register(sd, BLKDEV_SD) != 0) {
@@ -226,6 +223,7 @@ void blkdev_init(void) {
     bool present = false;
     blkdev_t *disk = virtio_blk_init(&present);
     if (present) {
+        // A configured disk is the root, even a broken one: no fallback.
         active = NULL;
         if (disk) {
             unsigned first = partition_count;
@@ -238,13 +236,17 @@ void blkdev_init(void) {
         // Keep the established backend diagnostic for smoke/failure checks.
         uart_puts(disk ? "[blkdev] using VirtIO disk\r\n" :
                         "[blkdev] configured VirtIO disk failed; no root device\r\n");
-    } else {
-        uart_puts("[blkdev] no VirtIO disk; using embedded ramdisk\r\n");
+        return;
     }
+    uart_puts(active ? "[blkdev] no VirtIO disk; using the ramdisk\r\n" :
+                       "[blkdev] no VirtIO disk\r\n");
 #endif
+    // Without a ramdisk the boot volume is the first one with /bin/init.
+    root_search = active == NULL;
 }
 
 blkdev_t *blkdev_root(void) { return active; }
+bool blkdev_root_search(void) { return root_search; }
 
 int blk_read(uint32_t lba, uint32_t count, void *buf) {
     return blkdev_read(active, lba, count, buf);

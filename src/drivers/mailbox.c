@@ -78,3 +78,44 @@ uint32_t mailbox_clock_query(uint32_t tag, uint32_t id, struct mailbox_clock_rep
               r.id == id;
     return ok ? r.rate : 0;
 }
+
+// One property tag whose answer is `words` 32-bit values (and whose request
+// carries none): true with the values in out[], false if the firmware did not
+// answer it.
+static bool property_get(uint32_t tag, unsigned words, uint32_t out[]) {
+    volatile uint32_t *msg = coherent_page(COHERENT_SLOT_KORA_PROPERTY);
+    unsigned i = 0;
+    msg[i++] = 0;  // total size, below
+    msg[i++] = MAILBOX_REQUEST;
+    msg[i++] = tag;
+    msg[i++] = words * 4;
+    msg[i++] = 0;
+    for (unsigned w = 0; w < words; w++) {
+        msg[i++] = 0;
+    }
+    msg[i++] = 0;  // end tag
+    msg[0] = i * 4;
+    if (!mailbox_call(MAILBOX_CHANNEL_PROPERTY, msg) || msg[1] != MAILBOX_RESPONSE_OK ||
+        !(msg[4] & 0x80000000u)) {
+        return false;
+    }
+    for (unsigned w = 0; w < words; w++) {
+        out[w] = msg[5 + w];
+    }
+    return true;
+}
+
+bool mailbox_arm_memory(uint32_t *base, uint32_t *size) {
+    uint32_t v[2];
+    if (!property_get(0x00010005, 2, v)) {
+        return false;
+    }
+    *base = v[0];
+    *size = v[1];
+    return true;
+}
+
+uint32_t mailbox_board_revision(void) {
+    uint32_t v[1];
+    return property_get(0x00010002, 1, v) ? v[0] : 0;
+}

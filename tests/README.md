@@ -249,6 +249,19 @@ Logs and `verification.json` live in `build/debug/qemu_virt/qemu-write` by defau
 
 `--expect-root-failure --disk <zeroed-image>` requires a selected VirtIO disk,
 failed mount and failed init load, so silent ramdisk fallback cannot pass.
+Without `--disk` it requires a kernel built without `--ramdisk` to report that
+no volume has `/bin/init`.
+
+`--ramdisk MB` tells the smoke test the kernel was built `--ramdisk` with that
+size: it checks the boot line, and when the ramdisk is the root (no `--disk`)
+runs the EL0 write steps (`writeprobe` and the quoted file tools) on it.
+Kernels built without a ramdisk boot from a `--sd` card or `--usb-stick` drive
+(their FAT32 copy of the userfs has `/bin/init`). `writeprobe df0:` adds checks
+that a read-only volume refuses writes, creates and renames.
+
+`tests/run-ramdisk-image-tests.py` (run by `tests/run-host-tests.sh`) checks
+`create-ramdisk-image.py`: size parsing, the blob format, and that the volume
+keeps the userfs contents, names and directory order.
 
 ## CI coverage
 
@@ -256,7 +269,7 @@ One producer job publishes `koraos.img` and user ELF symbols under a shared
 AArch64 artifact. Consumers download it and use `--userfs-dir` without invoking
 userland compilation or filesystem generation. The all-target job builds four
 Debug kernels, stages both hardware Release payloads into a temporary directory,
-creates a FAT32 SD image, and runs raspi3b smoke. A raspi3b storage job reads
+creates a FAT32 SD image, and runs raspi3b smoke on a 16M ramdisk. A raspi3b storage job reads
 and writes scratch SD cards and USB drives, and a raspi4b job covers the Pi 4
 kernel with its EMMC2 card. Separate virt profiles cover
 embedded graphics, 128 MiB external disk/keyboard, primary MBR boot, two labeled

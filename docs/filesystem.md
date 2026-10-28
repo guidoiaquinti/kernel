@@ -7,10 +7,12 @@ independent binaries read from the filesystem, not embedded in the kernel image.
 
 ## Where the disk comes from
 
-Pi hardware and raspi3b use a **ramdisk**: a FAT32 image built on the host and
-embedded in the kernel. QEMU virt can instead mount one attached VirtIO MMIO
-block disk. Both backends register together; FAT32 mounts every valid partition and uses
-the preferred boot partition as the initial working volume.
+A kernel built with `--ramdisk SIZE` carries a **ramdisk**: a FAT32 volume
+with the user programs and files, laid out in RAM at boot and read-write (see
+below). Otherwise the system comes from a disk: the SD card or a USB drive on a
+Pi, a VirtIO MMIO disk on QEMU virt (which is the root even with a ramdisk).
+All backends register together; FAT32 mounts every valid partition and uses
+the boot partition as the initial working volume.
 
 On the Pi 3 and Pi 4 (and QEMU raspi3b) the **SD card** registers too, through
 [`src/drivers/sdhci.c`](../src/drivers/sdhci.c): a polled SDHCI driver. On the
@@ -18,7 +20,8 @@ Pi 3 it drives the Arasan controller, which takes over the card's pins from
 the firmware's SDHOST controller; on the Pi 4 it drives EMMC2, which the slot
 is wired to. Standard and high-capacity cards work, on a 4-bit bus at
 25 MHz, with multi-block transfers. The card's FAT32 partitions become volumes
-next to the ramdisk, which stays the boot volume. The card is read-only unless
+next to the ramdisk, if any; without one, a card with `/bin/init` is the boot
+volume. The card is read-only unless
 the kernel is built with `--storage-writable`. Transfers run in the calling
 task under the BKL with interrupts masked.
 
@@ -32,9 +35,9 @@ USB completions arrive as interrupts on core 0. Single-sector reads are served
 from a 16 KB read-ahead window per drive.
 
 ```
-create-fs-image.sh  ──(mtools)──▶  build/userfs/aarch64/koraos.img  ──(.incbin)──▶  kernel image
-       ▲                                                                    │
-   fsroot/  +  build/userfs/aarch64/user/*.elf                                    _koraos_fs_start/_end
+create-fs-image.sh ──(mtools)──▶ build/userfs/aarch64/koraos.img ──▶ create-ramdisk-image.py ──(.incbin)──▶ kernel image
+       ▲                                     │                       (--ramdisk SIZE)            _koraos_ramdisk_start/_end
+   fsroot/ + build/userfs/aarch64/user/*.elf  └──(install, create-sd-image.sh)──▶ SD card boot partition
 ```
 
 - [`create-fs-image.sh`](../create-fs-image.sh) formats a bare FAT32 volume
@@ -45,13 +48,24 @@ create-fs-image.sh  ──(mtools)──▶  build/userfs/aarch64/koraos.img  �
 - Each built user program (`build/userfs/aarch64/user/<name>.elf`) is installed as
   `/bin/<name>` (the `.elf` suffix is stripped, so programs are spawned by bare
   name).
-- The standalone userfs producer (`cmake/userfs`) runs the script once; each
-  kernel configuration `.incbin`s the prepared `koraos.img` into the
-  kernel's read-only data, exposing `_koraos_fs_start` / `_koraos_fs_end`. The
-  image is rebuilt whenever anything in `fsroot/` or any user program changes.
-
-Because the image is part of the kernel binary, it is always present on both
-QEMU and real hardware with no extra media or QEMU flags.
+- The standalone userfs producer (`cmake/userfs`) runs the script once. The
+  image is rebuilt whenever anything in `fsroot/` or any user program changes,
+  and is never written to.
+- A kernel built with `./build.sh --ramdisk SIZE` embeds a **ramdisk**:
+  [`create-ramdisk-image.py`](../create-ramdisk-image.py) formats a FAT32
+  volume of SIZE, copies the userfs contents in (keeping their directory
+  order), and keeps only its non-zero 4 KiB runs, so even a `1G` ramdisk adds
+  a few hundred KB to the kernel image. At boot
+  [`src/fs/ramdisk.c`](../src/fs/ramdisk.c) finds free RAM past the page pool
+  (on a Pi from the firmware's ARM memory size and board revision, so a Pi 4
+  with 2 GB or more puts a large ramdisk above its first gigabyte; on virt from
+  the device tree), zeroes it and copies the runs in. The ramdisk is
+  read-write; its changes last until the machine stops.
+- Without a ramdisk the boot volume is the first registered volume with a
+  file at `/bin/init` (SD card, then USB drives; on virt a configured VirtIO
+  disk is the root, as with a ramdisk). The hardware install and
+  `create-sd-image.sh` copy the userfs contents onto the card's boot partition
+  for that.
 
 ## Layers
 
@@ -64,7 +78,7 @@ QEMU and real hardware with no extra media or QEMU flags.
   ─────────────────────────────────────────────────────────────────────────────
   block device  ──▶ blk_read(lba, count, buf), 512-byte sectors    (src/fs/blkdev.c)
   ─────────────────────────────────────────────────────────────────────────────
-  ramdisk       ──▶ the embedded FAT32 image, served in place from .rodata
+  ramdisk, SD, USB, VirtIO ──▶ backends (src/fs/ramdisk.c, src/drivers/, src/circle/)
 ```
 
 Each layer has a clean seam:
@@ -100,9 +114,9 @@ Each layer has a clean seam:
 - **8.3 short names** are an OEM code page, which the driver does not decode:
   non-ASCII short-name bytes become `?`. Names that genuinely need non-ASCII
   characters carry an LFN, which is decoded fully.
-- **`mformat -F`** forces a FAT32 BPB even for a small (2 MiB) volume, below the
-  usual 65525-cluster minimum. The driver only reads the BPB, so this is fine
-  and keeps the embedded image tiny.
+- **`mformat -F`** forces a FAT32 BPB even for a small volume (the 2 MiB
+  shared userfs, a 16 MiB ramdisk), below the usual 65525-cluster minimum. The
+  driver only reads the BPB, so this is fine.
 
 ## Existing-file writes and durability
 
@@ -201,8 +215,9 @@ tests/run-qemu-write.py
 ```
 
 Never attach the shared `build/userfs/aarch64/koraos.img` as writable media.
-The small embedded image remains a read-only boot artifact. Write tests use
-only scratch images; SD cards containing Pi firmware are outside this workflow.
+The ramdisk is a copy in RAM, so writing to it is always safe. Write tests on
+disks use only scratch images; SD cards containing Pi firmware are outside this
+workflow.
 
 ## Namespace operations and filenames
 
@@ -294,9 +309,9 @@ legacy transport is unsupported. Media defaults to read-only; set
 `KORA_QEMU_DISK_READONLY=off` only on a disposable image for write tests.
 The block API supports `blk_read`, `blk_write` and negotiated `blk_flush`.
 Writable file syscalls and tools operate on disposable writable media. The
-embedded ramdisk remains read-only. The driver's capacity is bounded by
-the current 32-bit sector API. Missing disks use the embedded root; a configured
-broken disk does not silently fall back. Timed-out devices retain DMA buffers
+driver's capacity is bounded by the current 32-bit sector API. Without a disk
+the ramdisk is the root (if built with one); a configured broken disk does not
+silently fall back. Timed-out devices retain DMA buffers
 and reject subsequent requests until reboot.
 
 ## Block registry and primary MBR partitions

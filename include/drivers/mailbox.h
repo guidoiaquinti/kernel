@@ -30,3 +30,10 @@ struct mailbox_clock_reply {
 // coherent page; callers are serialized by the BKL.
 uint32_t mailbox_clock_query(uint32_t tag, uint32_t id, struct mailbox_clock_reply *reply);
 
+
+// The ARM's share of the first gigabyte of RAM (the GPU's memory follows it):
+// false if the firmware did not answer. Same coherent page and rules as above.
+bool mailbox_arm_memory(uint32_t *base, uint32_t *size);
+
+// The board revision code (its RAM size among other things), or 0.
+uint32_t mailbox_board_revision(void);

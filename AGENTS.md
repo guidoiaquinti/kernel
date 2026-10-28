@@ -33,7 +33,10 @@ Use this file when you drop into the workspace so you can ramp quickly and keep 
   see `docs/locking.md`. The
   shared `build/userfs/aarch64/koraos.img` is immutable; never attach it writable
   or test writes on a Pi firmware card. Mutating user tools must surface sync
-  failures. The ramdisk remains read-only.
+  failures. The ramdisk (`--ramdisk SIZE`) is read-write and lives in RAM only.
+- Kernels built without `--ramdisk` boot from the first volume with
+  `/bin/init` (SD card, USB drive; a VirtIO disk on virt), so QEMU raspi runs
+  need `--ramdisk 16M` or a card/drive from `tests/create-sd-card-image.py`.
 - Use `run-qemu.sh` for rapid UART smoke tests; see the developer guide for hardware installation steps.
 - Documentation lives under `docs/`; do not store temporary todos there—use `project_doc/` for roadmap-level planning instead.
 

@@ -33,6 +33,10 @@ void frame_free_pages(void *pages, size_t count);
 size_t frame_alloc_free_count(void);
 size_t frame_alloc_total_count(void);
 
+// The first byte past the pool: RAM beyond it is not the allocator's (the
+// ramdisk goes there).
+uintptr_t frame_alloc_pool_end(void);
+
 #ifdef __cplusplus
 }
 #endif

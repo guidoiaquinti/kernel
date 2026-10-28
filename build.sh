@@ -13,6 +13,9 @@ Usage: ./build.sh [options] [clean]
   --userfs-only       Build only the shared AArch64 user programs/FAT image
   --userfs-dir DIR    Consume DIR/koraos.img without rebuilding userfs
   --install-to DIR    Install selected hardware targets after all builds pass
+  --ramdisk SIZE      Embed a read-write ramdisk of SIZE (e.g. 16M, 1G) holding the
+                      user programs; without it the kernel boots from the first
+                      SD card, USB drive or VirtIO disk volume with /bin/init
   --storage-writable  Let the kernel write to SD cards and USB drives (default:
                       read-only); --sd-writable is an alias
   --clean             Clean selected configuration/targets and owned userfs first
@@ -30,6 +33,7 @@ original_args=("$@")
 build_root="${BUILD_DIR:-$script_dir/build}"
 build_type="${BUILD_TYPE:-Debug}"
 storage_writable=OFF
+ramdisk_size=""
 userfs_override=""
 install_dir=""
 userfs_only=0
@@ -77,6 +81,7 @@ while [[ $# -gt 0 ]]; do
         --userfs-dir) require_value "$@"; userfs_override="$2"; shift 2 ;;
         --install-to) require_value "$@"; install_dir="$2"; shift 2 ;;
         --storage-writable|--sd-writable) storage_writable=ON; shift ;;
+        --ramdisk) require_value "$@"; ramdisk_size="$2"; shift 2 ;;
         --userfs-only) userfs_only=1; shift ;;
         --clean) clean_first=1; shift ;;
         clean) clean_only=1; shift ;;
@@ -170,7 +175,7 @@ for target in "${targets[@]}"; do
     target_dir="$build_root/$configuration/$target"
     configure_args=(-S "$script_dir" -B "$target_dir" -G "Unix Makefiles"
         "-DCMAKE_BUILD_TYPE=$build_type" "-DKORAOS_TARGET=$target" "-DKORAOS_USERFS_DIR=$userfs_dir"
-        "-DKORAOS_STORAGE_WRITABLE=$storage_writable")
+        "-DKORAOS_STORAGE_WRITABLE=$storage_writable" "-DKORAOS_RAMDISK_SIZE=$ramdisk_size")
     if [[ -n "$install_dir" && "$target" == hw_* ]]; then configure_args+=("-DBOOTMNT=$install_dir"); fi
     cmake "${configure_args[@]}"
     cmake --build "$target_dir" --parallel "$jobs"

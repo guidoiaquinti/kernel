@@ -111,12 +111,23 @@ void kernel_main(uintptr_t dtb) {
 #endif
 #endif
 
-  // Bring up the ramdisk block device (embedded FAT32 image) and mount it so
-  // the file syscalls have a filesystem to serve.
+  // Bring up the block devices (the ramdisk if built with one, SD card, USB
+  // drives, VirtIO) and mount their volumes, so the file syscalls have a
+  // filesystem to serve. Without a ramdisk or a VirtIO disk, the boot volume
+  // is the first one that has /bin/init.
   blkdev_init();
-  int fs_rc = fs_mount_registered(blkdev_root());
+  int fs_rc = blkdev_root_search() ? fs_mount_registered_search("/bin/init")
+                                   : fs_mount_registered(blkdev_root());
   if (fs_rc != 0) {
-    printf("fat32: mount failed: %d\n", fs_rc);
+    printf(blkdev_root_search() ? "fat32: no volume has /bin/init: %d\n" : "fat32: mount failed: %d\n",
+           fs_rc);
+  } else {
+    for (unsigned i = 0; i < fs_volume_count(); i++) {
+      const fs_volume_info_t *v = fs_volume_get(i);
+      if (v->boot) {
+        printf("fat32: booting from %s: (%s)\n", v->device, v->label);
+      }
+    }
   }
 
   // Persist the screen console for the lifetime of the kernel and make it the

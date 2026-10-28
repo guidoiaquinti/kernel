@@ -15,8 +15,6 @@ void free(void *ptr);
 int posix_memalign(void **out, size_t align, size_t size);
 int snprintf(char *buf, size_t size, const char *format, ...);
 
-const unsigned char _koraos_fs_start[512] = {0};
-const unsigned char _koraos_fs_end[1] = {0};
 int test_failures, test_checks;
 static const char *fixture_directory;
 static unsigned live_allocations;
@@ -282,6 +280,21 @@ static void namespace_paths(void) {
     CHECK(live_allocations == 0, "namespace reset releases mounted volumes and scratch state");
     CHECK(fs_mount_registered(NULL) < 0 && fs_boot_cwd(&cwd) < 0,
           "missing preferred root fails despite valid other volumes");
+    // Without a preferred root (no ramdisk), the boot volume is the first one
+    // that has the probe path.
+    CHECK(fs_mount_registered_search("/bin/extrahello") == 0 && fs_volume_count() == 2 &&
+              !fs_volume_get(0)->boot && fs_volume_get(1)->boot,
+          "search picks the volume with the probe");
+    CHECK(fs_boot_cwd(&cwd) == 0 && fs_getcwd(&cwd, path, sizeof(path)) == 0 &&
+              strcmp(path, "beta:") == 0,
+          "boot cwd is the searched volume");
+    fs_cwd_release(&cwd);
+    CHECK(fs_mount_registered_search("/bin/bootcmd") == 0 && fs_volume_get(0)->boot &&
+              !fs_volume_get(1)->boot,
+          "the first volume that has it wins");
+    CHECK(fs_mount_registered_search("/bin/init") == FS_ERR_NOTFOUND && fs_boot_cwd(&cwd) < 0,
+          "no volume has the probe: not found");
+    CHECK(fs_mount_registered_search("/docs") == FS_ERR_NOTFOUND, "a directory is not a program");
     fs_namespace_reset();
     blkdev_registry_reset();
     free(alpha.ctx);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Runs only on a disposable, writable FAT32 root. UTF-8 paths are compiled in
 // because interactive console input currently accepts ASCII characters only.
+//   writeprobe [volume:]   with a read-only volume (holding README.TXT), also
+//                          checks that it refuses writes, creates and renames
 #include "../../user/libk/koraos.h"
 
 static unsigned char buffer[1024], verify[1024];
@@ -31,11 +33,21 @@ static int write_text(const char *path, const char *text) {
     if (close(fd) < 0) result = -1;
     return result;
 }
+// `volume` followed by `name`, in a static buffer.
+static const char *on_volume(const char *volume, const char *name) {
+    static char path[96];
+    size_t n = 0;
+    for (; volume[n] != '\0' && n < sizeof(path) - 1; n++) path[n] = volume[n];
+    for (size_t i = 0; name[i] != '\0' && n < sizeof(path) - 1; i++) path[n++] = name[i];
+    path[n] = '\0';
+    return path;
+}
 static unsigned char pattern(unsigned position) {
     return (unsigned char)(position * 37 + 11);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    const char *read_only = argc > 1 ? argv[1] : NULL;  // a volume, e.g. "df0:"
     if (mkdir("/write tests") != 0 || mkdir("/write tests/nested old") != 0) return failure(1);
     int fd = open(initial, O_RDWR | O_CREAT | O_EXCL);
     if (fd < 0) return failure(2);
@@ -79,7 +91,8 @@ int main(void) {
     if (stat(final, &info) != 0 || info.size != 8211 || info.is_dir || stat(initial, &info) != -1 ||
         open(final, O_RDONLY | O_TRUNC) != -1 || open(final, O_WRONLY | O_EXCL) != -1 ||
         open(final, 0x1000) != -1 || open("/write tests", O_RDWR) != -1 ||
-        open("df0:README.TXT", O_WRONLY) != -1) return failure(13);
+        (read_only != NULL && open(on_volume(read_only, "README.TXT"), O_WRONLY) != -1))
+        return failure(13);
     for (unsigned i = 0; i < 16; i++) {
         held[i] = open(final, O_RDONLY);
         if (held[i] < 0) return failure(14);
@@ -105,12 +118,15 @@ int main(void) {
         assign("hold", NULL) != 0 || rmdir("/write tests/pinned parent/child") != 0 ||
         rmdir("/write tests/pinned parent") != 0) return failure(21);
     if (chdir("/write tests") != 0 || rename("sys:write tests", "sys:renamed tests") != -1 ||
-        chdir("sys:") != 0 || rename(final, "df0:moved.txt") != -1 ||
+        chdir("sys:") != 0 ||
+        (read_only != NULL && rename(final, on_volume(read_only, "moved.txt")) != -1) ||
         stat(final, &info) != 0 || info.size != 8211) return failure(22);
     fd = open("/write tests/read only create.txt", O_RDONLY | O_CREAT | O_EXCL);
     if (fd < 0 || read(fd, verify, sizeof(verify)) != 0 || write(fd, "x", 1) != -1 ||
         close(fd) != 0 || open("/write tests/read only create.txt", O_RDONLY | O_CREAT | O_EXCL) != -1 ||
-        open("df0:no writable create.txt", O_RDONLY | O_CREAT | O_EXCL) != -1) return failure(23);
+        (read_only != NULL &&
+         open(on_volume(read_only, "no writable create.txt"), O_RDONLY | O_CREAT | O_EXCL) != -1))
+        return failure(23);
     if (sync() != 0) return failure(24);
     kputs("writeprobe: data, namespace, UTF-8 and sync checked\n");
     return 0;

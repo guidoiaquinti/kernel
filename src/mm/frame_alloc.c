@@ -175,3 +175,7 @@ size_t frame_alloc_free_count(void) {
 size_t frame_alloc_total_count(void) {
     return pool_frames;
 }
+
+uintptr_t frame_alloc_pool_end(void) {
+    return pool_base + pool_frames * PAGE_SIZE;
+}

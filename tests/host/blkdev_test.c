@@ -2,8 +2,6 @@
 #include "test.h"
 #include "fs/blkdev.h"
 
-const unsigned char _koraos_fs_start[512] = {0};
-const unsigned char _koraos_fs_end[1] = {0};
 static uint8_t image[128 * BLK_SECTOR_SIZE];
 static blkdev_t backend;
 static unsigned reads, writes, flushes;

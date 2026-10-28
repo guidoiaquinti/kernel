@@ -285,10 +285,12 @@ categories:
         prs: [63, 64]
       - id: ramdisk
         name: Read-write ramdisk
-        status: in_progress
+        status: completed
         description: Optional ramdisk of any size up to the free RAM, chosen at build time; otherwise the system boots from the SD card or a USB drive.
         platforms: [rpi3, rpi4, qemu-raspi3b, qemu-virt]
         milestone: 10
+        completed: 2026-10-28
+        prs: [71]
       - id: usb-mass-storage
         name: USB mass storage
         status: completed

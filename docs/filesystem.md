@@ -354,7 +354,9 @@ slot represents a mountable partition, including a bare FAT32 image. An
 embedded ramdisk normally occupies `df0:`; attached VirtIO partitions follow.
 Slots retain their registry indices even if a partition fails to mount.
 Volume names come from the FAT label, preferring the root-directory label over
-the BPB copy. Matching of device names, volume names and path components is
+the BPB copy. Mounting searches only the first 100 root-directory clusters for
+that label, in one pass, so crafted media cannot stall boot; a label beyond them
+falls back to the BPB copy. Matching of device names, volume names and path components is
 case-insensitive for ASCII. Unicode filenames remain UTF-8 with exact
 non-ASCII matching.
 

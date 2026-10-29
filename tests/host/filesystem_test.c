@@ -20,6 +20,7 @@ static const char *fixture_directory;
 static unsigned live_allocations;
 static bool fail_allocations;
 static int backend_error;
+static unsigned backend_reads, backend_read_limit;
 static int backend_flush_error;
 static blkdev_t *failing_sync_backend;
 static blkdev_t *observed_sync_backend;
@@ -42,6 +43,7 @@ void kfree(void *pointer) {
 }
 static int memory_read(blkdev_t *dev, uint32_t lba, uint32_t count, void *buf) {
     if (backend_error) return backend_error;
+    if (backend_read_limit && ++backend_reads > backend_read_limit) return BLK_ERR_IO;
     if ((uint64_t)lba + count > dev->sector_count) return BLK_ERR_RANGE;
     const uint8_t *source = (const uint8_t *)dev->ctx + (size_t)lba * BLK_SECTOR_SIZE;
     uint8_t *destination = buf;
@@ -182,6 +184,36 @@ static void corrupt_media(void) {
         fat32_unmount(volume);
         free(backend.ctx);
     }
+}
+// Fixture root directories run on over a 400-cluster chain whose FAT links miss
+// the sector cache. The boot-time label scan must stay within a fixed read
+// budget and preserve the BPB fallback beyond it.
+static void root_label_scan(void) {
+    const char *labels[][2] = {{"deep-label.img", "fallback"}, {"late-label.img", "late"}};
+    for (unsigned i = 0; i < 2; i++) {
+        blkdev_t backend;
+        if (!load_backend(labels[i][0], &backend)) continue;
+        fat32_volume_t *volume = NULL;
+        backend_reads = 0;
+        backend_read_limit = 2048;
+        int rc = fat32_mount(&backend, &volume);
+        backend_read_limit = 0;
+        CHECK(rc == 0 && volume != NULL, "long root directory mounts within read budget");
+        CHECK(volume && strcmp(fat32_label(volume), labels[i][1]) == 0,
+              "root label scan is bounded: %s", labels[i][0]);
+        if (volume) fat32_unmount(volume);
+        free(backend.ctx);
+    }
+    const char *bad_roots[] = {"root-loop.img", "root-bad-chain.img"};
+    for (unsigned i = 0; i < 2; i++) {
+        blkdev_t backend;
+        if (!load_backend(bad_roots[i], &backend)) continue;
+        fat32_volume_t *volume = NULL;
+        CHECK(fat32_mount(&backend, &volume) == FS_ERR_CORRUPT && volume == NULL,
+              "corrupt root chain rejected during label scan: %s", bad_roots[i]);
+        free(backend.ctx);
+    }
+    CHECK(live_allocations == 0, "label scan releases all allocations");
 }
 static void error_paths(void) {
     blkdev_t backend;
@@ -609,6 +641,7 @@ int main(int argc, char **argv) {
     fixture_directory = argv[1];
     volume_interleaving();
     corrupt_media();
+    root_label_scan();
     error_paths();
     namespace_paths();
     namespace_collisions();

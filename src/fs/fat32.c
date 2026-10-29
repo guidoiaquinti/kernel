@@ -426,6 +426,45 @@ static void copy_label(char *out, const uint8_t *label) {
     }
 }
 
+// Formatters put the label at the start of the root directory. Mounting runs
+// at boot on attached media, so walk the chain once and only this far; past it
+// the BPB label stands.
+#define FAT32_LABEL_CLUSTERS 100u
+
+static int find_root_label(fat32_volume_t *vol) {
+    uint32_t cluster = vol->root_cluster;
+    uint32_t slow = cluster, fast = cluster;
+    for (uint32_t scanned = 0; scanned < FAT32_LABEL_CLUSTERS; scanned++) {
+        if (scanned > 0) {
+            int rc = chain_advance(vol, &cluster, &slow, &fast);
+            if (rc != 0) {
+                return rc;
+            }
+            if (cluster >= 0x0ffffff8u) {
+                return 0;
+            }
+        }
+        uint32_t lba = cluster_to_lba(vol, cluster);
+        for (uint32_t s = 0; s < vol->sec_per_clus; s++) {
+            struct sector_cache *slot;
+            if (cache_get(vol, lba + s, &slot) != 0) {
+                return FS_ERR_IO;
+            }
+            for (uint32_t off = 0; off < BLK_SECTOR_SIZE; off += 32) {
+                const uint8_t *ent = slot->bytes + off;
+                if (ent[0] == 0) {
+                    return 0;
+                }
+                if (ent[0] != 0xe5 && ent[11] == 0x08) {
+                    copy_label(vol->label, ent);
+                    return 0;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 int fat32_mount(blkdev_t *dev, fat32_volume_t **out) {
     if (out == NULL) {
         return FS_ERR_INVAL;
@@ -496,24 +535,10 @@ int fat32_mount(blkdev_t *dev, fat32_volume_t **out) {
     }
     copy_label(vol->label, sec + 71);
     // Root-directory label is authoritative; the BPB copy can be stale.
-    for (uint32_t pos = 0; ; pos += 32) {
-        if (pos > 0xffffffffu - 32) {
-            kfree(vol);
-            return FS_ERR_CORRUPT;
-        }
-        uint8_t ent[32];
-        long n = chain_read(vol, root, pos, ent, sizeof(ent));
-        if (n < 0) {
-            kfree(vol);
-            return (int)n;
-        }
-        if (n == 0 || ent[0] == 0) {
-            break;
-        }
-        if (ent[0] != 0xe5 && ent[11] == 0x08) {
-            copy_label(vol->label, ent);
-            break;
-        }
+    int rc = find_root_label(vol);
+    if (rc != 0) {
+        kfree(vol);
+        return rc;
     }
     *out = vol;
     return 0;

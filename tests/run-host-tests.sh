@@ -37,7 +37,7 @@ run_test() {
     done
     echo "== $name"
     if ! "$CC" "${CFLAGS[@]}" ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} -o "$OUT/${name}_test" \
-            "$ROOT/tests/host/${name}_test.c" "${sources[@]}"; then
+            "$ROOT/tests/host/${name}_test.c" ${sources[@]+"${sources[@]}"}; then
         echo "   BUILD FAILED"
         failed=1
         return
